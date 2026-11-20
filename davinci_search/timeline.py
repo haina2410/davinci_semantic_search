@@ -8,6 +8,7 @@ import math
 import re
 
 from .search import Hit
+from .timeline_audit import canonical_path
 
 
 MARKER_PREFIX = "davinci-semantic-search/v1/"
@@ -27,9 +28,9 @@ def timecode(frame: int, rate: Fraction, drop_frame: bool = False) -> str:
     if drop_frame and rate in (NTSC["29.97"], NTSC["59.94"], NTSC["119.88"]):
         separator = ";"
         dropped = nominal // 15
-        five_hundred_ninety_four_seconds = nominal * 600 - dropped * 9
+        frames_per_ten_minutes = nominal * 600 - dropped * 9
         frames_per_minute = nominal * 60 - dropped
-        ten_minutes, remaining = divmod(frame, five_hundred_ninety_four_seconds)
+        ten_minutes, remaining = divmod(frame, frames_per_ten_minutes)
         frame += dropped * (ten_minutes * 9 + max(0, remaining - dropped) // frames_per_minute)
     secs, frames = divmod(frame, nominal)
     mins, seconds = divmod(secs, 60)
@@ -41,6 +42,8 @@ def timecode(frame: int, rate: Fraction, drop_frame: bool = False) -> str:
 class Placement:
     key: str
     source_key: str
+    source_path: str
+    audio_channels: int
     track: int
     record_start: Fraction
     record_end: Fraction
@@ -83,6 +86,10 @@ def project_hits(snapshot: Snapshot, hits: list[Hit]) -> TimelineResults:
         unknown = snapshot.opaque or hit.media.key in snapshot.unverified
         found = False
         for placement in by_source.get(hit.media.key, []):
+            if (placement.source_path != canonical_path(hit.media.path)
+                    or placement.audio_channels != hit.media.audio_channels):
+                unknown = True
+                continue
             if hit.end_ms <= placement.source_start_ms or hit.start_ms >= placement.source_end_ms:
                 continue
             if hit.start_ms < placement.source_start_ms or hit.end_ms > placement.source_end_ms:
@@ -104,9 +111,10 @@ def project_hits(snapshot: Snapshot, hits: list[Hit]) -> TimelineResults:
 
 def clear_search_markers(timeline) -> int:
     failed = 0
-    for frame, marker in (timeline.GetMarkers() or {}).items():
-        if str(marker.get("customData", "")).startswith(MARKER_PREFIX):
-            failed += not timeline.DeleteMarkerAtFrame(int(frame))
+    for marker in (timeline.GetMarkers() or {}).values():
+        tag = marker.get("customData", "")
+        if isinstance(tag, str) and tag.startswith(MARKER_PREFIX):
+            failed += not timeline.DeleteMarkerByCustomData(tag)
     return failed
 
 

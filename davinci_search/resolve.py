@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from fractions import Fraction
+import json
 from pathlib import Path
 from typing import Iterator, Protocol
 
@@ -79,8 +80,26 @@ def number(value: object) -> Fraction:
     return Fraction(str(value))
 
 
-def placement(item, source, track: int, rate: Fraction) -> Placement | None:
+def mapped_channels(item) -> int | None:
+    try:
+        mapping = json.loads(optional_call(item, "GetSourceAudioChannelMapping"))
+        count = mapping["embedded_audio_channels"]
+        if not isinstance(count, int) or count < 1 or mapping["linked_audio"]:
+            return None
+        heard = {
+            channel for entry in mapping["track_mapping"].values()
+            if not entry["mute"] for channel in entry["channel_idx"]
+        }
+        return count if heard == set(range(1, count + 1)) else None
+    except (AttributeError, KeyError, TypeError, ValueError):
+        return None
+
+
+def placement(item, source, path: str, track: int, rate: Fraction, audit: TimingAudit) -> Placement | None:
     """Accept only forward, real-time source ranges corroborated by the clip edit points."""
+    channels = mapped_channels(item)
+    if channels is None:
+        return None
     speed = optional_call(item, "GetSpeed")
     speed = {str(key).casefold(): value for key, value in speed.items()} if isinstance(speed, dict) else {}
     try:
@@ -90,27 +109,19 @@ def placement(item, source, track: int, rate: Fraction) -> Placement | None:
         ):
             return None
         record_start, record_end = (number(item.GetStart(True)), number(item.GetEnd(True)))
-        trim_ms = number(item.GetLeftOffset(True)) * 1000 / rate
-        record_length = (record_end - record_start) * 1000 / rate
-        source_fps = source.GetClipProperty("FPS")
-        source_rate = fps(source_fps) if source_fps and str(source_fps) != "0" else rate
-        first, last = number(item.GetSourceStartFrame()), number(item.GetSourceEndFrame())
-        start_ms, end_ms = first * 1000 / source_rate, last * 1000 / source_rate
-        tolerance = max(1000 / source_rate, 1000 / rate)
-        if first < 0 or last < first or record_length <= 0 or abs(start_ms - trim_ms) > tolerance:
+        source_start = number(item.GetSourceStartTime())
+        source_end = number(item.GetSourceEndTime())
+        record_length = (record_end - record_start) / rate
+        tolerance = 1 / (20 * rate)
+        if record_length <= 0 or abs(source_end - source_start - record_length) > tolerance:
             return None
-        span = end_ms - start_ms
-        # Some clip types describe the source end by its last frame, others by its boundary.
-        if abs(span - record_length) <= tolerance / 2:
-            boundary = end_ms
-        elif abs(span + 1000 / source_rate - record_length) <= tolerance / 2:
-            boundary = end_ms + 1000 / source_rate
-        else:
+        offset = audit.source_offset(path, record_start / rate, record_length, source_start, tolerance)
+        if offset is None or offset < 0:
             return None
     except (AttributeError, IndexError, TypeError, ValueError, ZeroDivisionError):
         return None
-    return Placement(item.GetUniqueId(), media_key(source), track, record_start,
-                     record_end, start_ms, boundary)
+    return Placement(item.GetUniqueId(), media_key(source), path, channels, track, record_start,
+                     record_end, offset * 1000, (offset + record_length) * 1000)
 
 
 def read_timeline(timeline, audit: TimingAudit) -> Snapshot:
@@ -140,9 +151,8 @@ def read_timeline(timeline, audit: TimingAudit) -> Snapshot:
             if not file_path or not key or any(label in kind for label in COMPLEX_TYPES):
                 opaque = True
                 continue
-            verified = None
-            if canonical_path(file_path) in audit.verified_paths:
-                verified = placement(item, source, track, rate)
+            path = canonical_path(file_path)
+            verified = placement(item, source, path, track, rate, audit)
             if verified:
                 placements.append(verified)
             else:

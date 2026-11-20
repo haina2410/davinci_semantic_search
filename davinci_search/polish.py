@@ -41,6 +41,10 @@ class PolishError(RuntimeError):
     """The raw transcript should remain available for a later retry."""
 
 
+class CodexUnavailable(PolishError):
+    """The Codex executable cannot be started on this machine."""
+
+
 def batches(raw: dict[int, str]) -> Iterator[tuple[list[dict], list[dict]]]:
     context: list[dict] = []
     targets: list[dict] = []
@@ -93,6 +97,8 @@ class Codex:
                         raise ValueError("Mismatched segment IDs")
                 except PolishError:
                     raise
+                except FileNotFoundError as error:
+                    raise CodexUnavailable("Không tìm thấy Codex CLI. Kiểm tra cấu hình cài đặt.") from error
                 except (OSError, ValueError, KeyError, TypeError, TimeoutExpired) as error:
                     raise PolishError("Codex gián đoạn hoặc trả về dữ liệu không hợp lệ.") from error
                 edits.update(checked)

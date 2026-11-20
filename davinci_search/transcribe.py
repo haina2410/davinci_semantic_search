@@ -8,7 +8,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 import wave
 
-from .index import Media, Segment
+from .index import Media, Segment, Transcript
 from .runtime import Settings, run_tool
 
 
@@ -22,19 +22,19 @@ class Whisper:
         self.scratch_dir = scratch_dir
         self.vulkan = settings.whisper_vulkan
 
-    def transcribe(self, media: Media) -> list[Segment]:
+    def transcribe(self, media: Media) -> Transcript:
         settings = self.settings
         if not settings.whisper_model.is_file():
             raise RuntimeError("Không tìm thấy model whisper.cpp. Kiểm tra cấu hình cài đặt.")
         probe = run_tool([
             settings.ffprobe, "-v", "error", "-select_streams", "a", "-show_entries",
-            "stream=index:stream_disposition=default", "-of", "json", "-i", media.path,
+            "stream=index,channels:stream_disposition=default", "-of", "json", "-i", media.path,
         ], timeout=60)
         if probe.returncode:
             raise RuntimeError("FFprobe không đọc được media.")
         streams = json.loads(probe.stdout).get("streams", [])
         if not streams:
-            return []
+            return Transcript([], 0)
         stream = next((s for s in streams if s.get("disposition", {}).get("default")), streams[0])
 
         with TemporaryDirectory(prefix="asr-", dir=self.scratch_dir) as scratch:
@@ -57,7 +57,8 @@ class Whisper:
                     segments.extend(self._recognize(audio, sample_offset, samples))
                 sample_offset += samples
                 audio.unlink()
-            return sorted(segments, key=lambda segment: (segment.start_ms, segment.end_ms))
+            channels = int(stream.get("channels", 0)) if len(streams) == 1 else 0
+            return Transcript(sorted(segments, key=lambda s: (s.start_ms, s.end_ms)), channels)
 
     def _recognize(self, audio: Path, sample_offset: int, samples: int) -> list[Segment]:
         output = audio.with_suffix("")

@@ -9,8 +9,8 @@ import subprocess
 import time
 from typing import Callable, Generator
 
-from .index import Index, Media, Segment
-from .polish import Codex, PolishError
+from .index import Index, Media, Transcript
+from .polish import Codex, CodexUnavailable
 from .runtime import Settings
 from .transcribe import Whisper
 
@@ -67,7 +67,7 @@ def request_index(index: Index, settings: Settings, scan: Callable[[], list[Medi
 
 
 def run_queue(
-    index: Index, transcribe: Callable[[Media], list[Segment]],
+    index: Index, transcribe: Callable[[Media], Transcript],
     polish: Callable[[dict[int, str]], dict[int, str]],
 ) -> None:
     polish_unavailable: str | None = None
@@ -86,7 +86,7 @@ def run_queue(
             edits = polish(index.raw(media))
             check_revision(media)
             index.save_polish(media, edits)
-        except PolishError as error:
+        except CodexUnavailable as error:
             polish_unavailable = str(error)
             index.record_error(media, polish_unavailable)
         except (OSError, ValueError, RuntimeError) as error:
@@ -97,13 +97,13 @@ def run_queue(
     for media in index.pending("asr"):
         try:
             check_revision(media)
-            segments = transcribe(media)
+            transcript = transcribe(media)
             check_revision(media)
-            index.save_transcript(media, segments)
+            index.save_transcript(media, transcript)
         except (OSError, ValueError, KeyError, RuntimeError, subprocess.TimeoutExpired) as error:
             index.record_error(media, str(error))
             continue
-        if segments:
+        if transcript.segments:
             finish_polish(media)
     index.finish()
 

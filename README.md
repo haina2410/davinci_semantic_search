@@ -29,10 +29,12 @@ Nếu layout build khác, truyền đường dẫn đến executable được t�
 
 1. Chọn **Lập chỉ mục project** để quét Media Pool. Audio được đọc từ stream mặc định của tệp, hoặc stream đầu tiên khi không có mặc định.
 2. Chọn **Nguồn** hoặc **Timeline** rồi nhập cụm cần tìm. Có thể gõ không dấu hoặc sai nhẹ. Chọn một kết quả và bấm **Chọn trong Media Pool** để xác định media nguồn. Mốc nguồn tính từ đầu tệp.
-3. Ở chế độ Timeline, kết quả **Trong timeline** hiển thị track và timecode. Chọn một hàng và bấm **Đặt marker tạm**. Marker nằm trên thước timeline ở frame tìm được. Lượt tìm mới trên cùng timeline dọn các marker tạm của công cụ. Các đoạn ngoài điểm cắt hiển thị riêng. Clip phức tạp hoặc đoạn giao điểm cắt có thể hiện **Chưa xác minh** nếu công cụ chưa xác định được frame hoặc phạm vi thoại.
+3. Ở chế độ Timeline, kết quả **Trong timeline** hiển thị track và timecode. Chọn một hàng và bấm **Đặt marker tạm**. Marker nằm trên thước timeline ở frame tìm được. Lượt tìm mới trên cùng timeline dọn các marker tạm của công cụ. Các đoạn ngoài điểm cắt hiển thị riêng. Clip phức tạp, tệp nhiều stream âm thanh, ánh xạ kênh khác bản nhận dạng hoặc đoạn giao điểm cắt có thể hiện **Chưa xác minh** nếu công cụ chưa xác định được frame hoặc phạm vi thoại.
 4. Nếu Resolve hoặc worker gián đoạn, mở lại cùng project và chọn **Tiếp tục lập chỉ mục**. Transcript đã lưu được dùng lại. Bấm **Cập nhật tiến độ** để xem trạng thái. Giữ chuột trên dòng trạng thái để xem các lỗi clip. Cơ sở dữ liệu và `worker.log` nằm theo project dưới thư mục dữ liệu.
 
 Transcript gốc có thể tìm ngay với nhãn **Chưa hiệu đính**. Bật **Tìm thêm trong bản gốc** để tra cả transcript gốc sau khi hiệu đính. Codex nhận văn bản cùng mã đoạn để sửa lỗi và lặp do nhận dạng. Khi Codex tạm thời không hoạt động, mở lại lượt lập chỉ mục sẽ thử tiếp từ bước đó.
+
+Nếu cửa sổ script không mở, xem `.runtime/resolve-script-error.log` và Resolve Console.
 
 ## Kiểm tra
 

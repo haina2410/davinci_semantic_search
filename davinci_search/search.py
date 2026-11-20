@@ -66,7 +66,7 @@ def search(rows: list[IndexedSegment], query: str, include_original: bool = Fals
         candidate = fold(token)
         if expected == candidate:
             return 0
-        limit = 0 if len(expected) < 4 else 1 if len(expected) < 8 else 2
+        limit = 0 if len(expected) < 3 else 1 if len(expected) < 8 else 2
         if not limit or abs(len(candidate) - len(expected)) > limit:
             return None
         edits = edit_distance(expected, candidate)

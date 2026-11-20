@@ -27,19 +27,19 @@ def open_window(resolve, dispatcher_factory, settings: Settings) -> None:
     window = dispatch.AddWindow(
         {"ID": "TranscriptSearch", "WindowTitle": "Davinci Semantic Search", "Geometry": [200, 160, 1040, 570]},
         [ui.VGroup({"Spacing": 8}, [
-            ui.HGroup({}, [
+            ui.HGroup({"Weight": 0}, [
                 ui.Button({"ID": "Index", "Text": "Lập chỉ mục project", "Weight": 0}),
                 ui.Button({"ID": "Refresh", "Text": "Cập nhật tiến độ", "Weight": 0}),
                 ui.Label({"ID": "IndexStatus", "Text": "", "Weight": 1}),
             ]),
-            ui.HGroup({}, [
+            ui.HGroup({"Weight": 0}, [
                 ui.ComboBox({"ID": "Scope", "Weight": 0}),
                 ui.LineEdit({"ID": "Query", "PlaceholderText": "Nhập lời thoại tiếng Việt hoặc tiếng Anh"}),
                 ui.CheckBox({"ID": "Original", "Text": "Tìm thêm trong bản gốc", "Checked": False, "Weight": 0}),
                 ui.Button({"ID": "Search", "Text": "Tìm", "Weight": 0}),
             ]),
-            ui.Tree({"ID": "Results", "AlternatingRowColors": True, "SortingEnabled": False, "Weight": 1}),
-            ui.HGroup({}, [
+            ui.Tree({"ID": "Results", "AlternatingRowColors": True, "SortingEnabled": False, "Weight": 3}),
+            ui.HGroup({"Weight": 0}, [
                 ui.Label({"ID": "Message", "WordWrap": True, "Text": "", "Weight": 1}),
                 ui.Button({"ID": "SelectSource", "Text": "Chọn trong Media Pool", "Weight": 0}),
                 ui.Button({"ID": "Marker", "Text": "Đặt marker tạm", "Weight": 0}),
@@ -53,13 +53,18 @@ def open_window(resolve, dispatcher_factory, settings: Settings) -> None:
     tree = widgets["Results"]
     tree.ColumnCount = 7
     header = tree.NewItem()
-    for index, (label, width) in enumerate((
+    columns = (
         ("Phạm vi", 125), ("Media nguồn", 185), ("Mốc nguồn", 110), ("Timeline", 145),
-        ("Lời thoại", 298), ("Transcript", 128), ("ID", 0)
-    )):
+        ("Lời thoại", 298), ("Transcript", 128), ("", 0),
+    )
+    for index, (label, _) in enumerate(columns):
         header.Text[index] = label
-        tree.ColumnWidth[index] = width
     tree.SetHeaderItem(header)
+    for index, (_, width) in enumerate(columns):
+        tree.ColumnWidth[index] = width
+    hide_column = getattr(tree, "SetColumnHidden", None)
+    if callable(hide_column):
+        hide_column(6, True)
 
     manager = resolve.GetProjectManager()
     current_index: Index | None = None
@@ -184,9 +189,14 @@ def open_window(resolve, dispatcher_factory, settings: Settings) -> None:
 
     def selected() -> tuple[Hit, TimelineHit | None]:
         selection = tree.SelectedItems()
-        if not selection or selection[0].Text[6] not in rows:
+        if not selection:
             raise RuntimeError("Chọn một kết quả tìm kiếm.")
-        return rows[selection[0].Text[6]]
+        selected_rows = selection.values() if isinstance(selection, dict) else selection
+        row = next(iter(selected_rows), None)
+        result = rows.get(row.Text[6]) if row is not None else None
+        if result is None:
+            raise RuntimeError("Chọn một kết quả tìm kiếm.")
+        return result
 
     @handle_errors
     def choose_source():

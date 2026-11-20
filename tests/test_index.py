@@ -2,7 +2,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from davinci_search.index import Index, Media, Segment
+from davinci_search.index import Index, Media, Segment, Transcript
 from davinci_search.polish import PolishError
 from davinci_search.search import search
 from davinci_search.worker import claim_worker, run_queue, worker_active
@@ -27,7 +27,7 @@ class IndexTests(unittest.TestCase):
             raise KeyboardInterrupt
 
         with self.assertRaises(KeyboardInterrupt):
-            run_queue(self.index, lambda _: [Segment(4000, 9000, "Đi đến cửa hàng")], interrupted)
+            run_queue(self.index, lambda _: Transcript([Segment(4000, 9000, "Đi đến cửa hàng")], 1), interrupted)
 
         reopened = Index(self.db_path)
         self.assertTrue(reopened.status().requested)
@@ -40,11 +40,11 @@ class IndexTests(unittest.TestCase):
         self.assertFalse(reopened.status().needs_attention)
 
     def test_edited_source_is_recognized_again(self):
-        run_queue(self.index, lambda _: [Segment(1, 1000, "The original recording")], lambda raw: raw)
+        run_queue(self.index, lambda _: Transcript([Segment(1, 1000, "The original recording")], 1), lambda raw: raw)
         self.source.write_bytes(b"edited fixture")
         new_media = Media.from_path(self.media.key, self.media.name, str(self.source))
         self.index.queue([new_media])
-        run_queue(self.index, lambda _: [Segment(5, 500, "A replacement")], lambda raw: raw)
+        run_queue(self.index, lambda _: Transcript([Segment(5, 500, "A replacement")], 1), lambda raw: raw)
         self.assertFalse(search(self.index.searchable(), "original"))
         self.assertEqual(search(self.index.searchable(), "replacement")[0].start_ms, 5)
 
@@ -52,12 +52,13 @@ class IndexTests(unittest.TestCase):
         def unavailable(_):
             raise PolishError("Codex unavailable")
 
-        run_queue(self.index, lambda _: [Segment(1, 100, "He found the door")], unavailable)
+        run_queue(self.index, lambda _: Transcript([Segment(1, 100, "He found the door")], 1), unavailable)
         self.assertTrue(self.index.status().needs_attention)
         self.assertEqual(search(self.index.searchable(), "found the door")[0].version, "pending")
         self.index.queue([self.media])
         run_queue(self.index, lambda _: self.fail("ASR already ran"), lambda _: {0: "He opened the door"})
         self.assertFalse(search(self.index.searchable(), "found the door"))
+        self.assertEqual(search(self.index.searchable(), "teh door")[0].version, "polished")
         self.assertEqual(search(self.index.searchable(), "found the door", include_original=True)[0].version, "raw")
 
     def test_only_one_worker_can_claim_project(self):

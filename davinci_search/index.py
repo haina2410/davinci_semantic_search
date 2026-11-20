@@ -16,6 +16,7 @@ class Media:
     name: str
     path: str
     revision: str | None
+    audio_channels: int | None = None
 
     @classmethod
     def from_path(cls, key: str, name: str, path: str) -> Media:
@@ -33,6 +34,12 @@ class Segment:
     start_ms: int
     end_ms: int
     text: str
+
+
+@dataclass(frozen=True)
+class Transcript:
+    segments: list[Segment]
+    audio_channels: int
 
 
 @dataclass(frozen=True)
@@ -68,7 +75,7 @@ CREATE TABLE IF NOT EXISTS media (
     key TEXT PRIMARY KEY, name TEXT NOT NULL, path TEXT NOT NULL,
     revision TEXT, present INTEGER NOT NULL, available INTEGER NOT NULL,
     phase TEXT NOT NULL CHECK (phase IN ('asr', 'polish', 'done', 'silent')),
-    error TEXT
+    error TEXT, audio_channels INTEGER
 );
 CREATE TABLE IF NOT EXISTS segments (
     media_key TEXT NOT NULL REFERENCES media(key) ON DELETE CASCADE,
@@ -91,6 +98,10 @@ class Index:
         with closing(self._connect()) as db:
             db.execute("PRAGMA journal_mode=WAL")
             db.executescript(SCHEMA)
+            with db:
+                db.execute("BEGIN IMMEDIATE")
+                if "audio_channels" not in {row[1] for row in db.execute("PRAGMA table_info(media)")}:
+                    db.execute("ALTER TABLE media ADD COLUMN audio_channels INTEGER")
 
     def _connect(self) -> sqlite3.Connection:
         db = sqlite3.connect(self.path, timeout=10)
@@ -104,15 +115,18 @@ class Index:
             db.execute("UPDATE media SET present=0")
             for item in media:
                 old = db.execute(
-                    "SELECT path, revision FROM media WHERE key=?", (item.key,)
+                    "SELECT path, revision, phase, audio_channels FROM media WHERE key=?", (item.key,)
                 ).fetchone()
                 invalidated = old is None or old["path"] != item.path or (
-                    item.revision is not None and old["revision"] != item.revision
+                    item.revision is not None and (
+                        old["revision"] != item.revision
+                        or (old["phase"] in ("polish", "done") and old["audio_channels"] is None)
+                    )
                 )
                 if invalidated:
                     db.execute("DELETE FROM media WHERE key=?", (item.key,))
                     db.execute(
-                        "INSERT INTO media VALUES (?, ?, ?, ?, 1, ?, 'asr', NULL)",
+                        "INSERT INTO media VALUES (?, ?, ?, ?, 1, ?, 'asr', NULL, NULL)",
                         (item.key, item.name, item.path, item.revision, item.revision is not None),
                     )
                 else:
@@ -131,12 +145,13 @@ class Index:
             )
             return [Media(*row) for row in rows]
 
-    def save_transcript(self, media: Media, segments: list[Segment]) -> None:
+    def save_transcript(self, media: Media, transcript: Transcript) -> None:
+        segments = transcript.segments
         with closing(self._connect()) as db, db:
             changed = db.execute(
-                """UPDATE media SET phase=?, error=NULL
+                """UPDATE media SET phase=?, error=NULL, audio_channels=?
                    WHERE key=? AND revision=? AND phase='asr' AND present=1""",
-                ("polish" if segments else "silent", media.key, media.revision),
+                ("polish" if segments else "silent", transcript.audio_channels, media.key, media.revision),
             )
             if changed.rowcount:
                 db.executemany(
@@ -195,8 +210,8 @@ class Index:
     def searchable(self) -> list[IndexedSegment]:
         with closing(self._connect()) as db:
             rows = db.execute(
-                """SELECT key, name, path, revision, number, start_ms, end_ms, raw, polished
+                """SELECT key, name, path, revision, audio_channels, number, start_ms, end_ms, raw, polished
                    FROM media JOIN segments ON media.key=segments.media_key
                    WHERE present=1 ORDER BY media.key, number"""
             )
-            return [IndexedSegment(Media(*row[:4]), *row[4:]) for row in rows]
+            return [IndexedSegment(Media(*row[:5]), *row[5:]) for row in rows]
