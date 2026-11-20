@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from pathlib import Path
 import hashlib
 import sqlite3
+import time
 from typing import Iterable
 
 
@@ -63,6 +64,17 @@ class IndexStatus:
         return self.requested or bool(self.errors)
 
 
+@dataclass(frozen=True)
+class RunStatus:
+    token: str
+    state: str
+    started_at: float
+    backend: str
+    device: str
+    fallback: str
+    recognizing: bool
+
+
 def project_db(directory: Path, project_id: str) -> Path:
     if not project_id:
         raise ValueError("Resolve không cung cấp ID của project.")
@@ -88,6 +100,12 @@ CREATE TABLE IF NOT EXISTS request (
     pending INTEGER NOT NULL
 );
 INSERT OR IGNORE INTO request VALUES (1, 0);
+CREATE TABLE IF NOT EXISTS worker_run (
+    id INTEGER PRIMARY KEY CHECK (id = 1),
+    token TEXT NOT NULL, state TEXT NOT NULL, started_at REAL NOT NULL,
+    backend TEXT NOT NULL DEFAULT '', device TEXT NOT NULL DEFAULT '',
+    fallback TEXT NOT NULL DEFAULT '', recognizing INTEGER NOT NULL DEFAULT 0
+);
 """
 
 
@@ -109,7 +127,7 @@ class Index:
         db.execute("PRAGMA foreign_keys=ON")
         return db
 
-    def queue(self, media: Iterable[Media]) -> None:
+    def queue(self, media: Iterable[Media], token: str | None = None) -> None:
         """Replace the project inventory and request a run in one transaction."""
         with closing(self._connect()) as db, db:
             db.execute("UPDATE media SET present=0")
@@ -135,6 +153,38 @@ class Index:
                         (item.revision is not None, item.name, item.key),
                     )
             db.execute("UPDATE request SET pending=1 WHERE id=1")
+            if token:
+                db.execute(
+                    "INSERT OR REPLACE INTO worker_run (id, token, state, started_at) VALUES (1, ?, 'starting', ?)",
+                    (token, time.time()),
+                )
+
+    def run_status(self) -> RunStatus | None:
+        with closing(self._connect()) as db:
+            row = db.execute(
+                "SELECT token, state, started_at, backend, device, fallback, recognizing FROM worker_run"
+            ).fetchone()
+            return RunStatus(*row) if row else None
+
+    def change_run(self, token: str, before: tuple[str, ...], after: str) -> bool:
+        placeholders = ", ".join("?" for _ in before)
+        with closing(self._connect()) as db, db:
+            cursor = db.execute(
+                f"UPDATE worker_run SET state=? WHERE token=? AND state IN ({placeholders})",
+                (after, token, *before),
+            )
+            return cursor.rowcount == 1
+
+    def report_backend(self, token: str, backend: str, device: str, fallback: str) -> None:
+        with closing(self._connect()) as db, db:
+            db.execute(
+                "UPDATE worker_run SET recognizing=1, backend=?, device=?, fallback=? WHERE token=?",
+                (backend, device, fallback, token),
+            )
+
+    def end_recognition(self, token: str) -> None:
+        with closing(self._connect()) as db, db:
+            db.execute("UPDATE worker_run SET recognizing=0 WHERE token=?", (token,))
 
     def pending(self, phase: str) -> list[Media]:
         with closing(self._connect()) as db:

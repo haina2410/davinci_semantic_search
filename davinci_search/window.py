@@ -3,15 +3,18 @@
 from __future__ import annotations
 
 from functools import wraps
+from subprocess import Popen
+from time import monotonic, sleep
 from uuid import uuid4
 
+from .hardware import describe_recognition, hardware_fallback, start_hardware_probe
 from .index import Index, Media, project_db
 from .resolve import read_timeline, scan_media, select_source
 from .runtime import Settings
 from .search import Hit, search
 from .timeline import Snapshot, TimelineHit, add_search_marker, clear_search_markers, project_hits, timecode
 from .timeline_audit import audit_timeline
-from .worker import request_index, worker_active
+from .worker import STOPPABLE, request_index, request_stop, start_recovery, starting, worker_active
 
 
 def source_time(milliseconds: int) -> str:
@@ -29,8 +32,10 @@ def open_window(resolve, dispatcher_factory, settings: Settings) -> None:
         [ui.VGroup({"Spacing": 8}, [
             ui.HGroup({"Weight": 0}, [
                 ui.Button({"ID": "Index", "Text": "Lập chỉ mục project", "Weight": 0}),
+                ui.Button({"ID": "Stop", "Text": "Dừng", "Enabled": False, "Weight": 0}),
                 ui.Button({"ID": "Refresh", "Text": "Cập nhật tiến độ", "Weight": 0}),
                 ui.Label({"ID": "IndexStatus", "Text": "", "Weight": 1}),
+                ui.Button({"ID": "About", "Text": "About", "Weight": 0}),
             ]),
             ui.HGroup({"Weight": 0}, [
                 ui.ComboBox({"ID": "Scope", "Weight": 0}),
@@ -47,6 +52,17 @@ def open_window(resolve, dispatcher_factory, settings: Settings) -> None:
         ])],
     )
     widgets = window.GetItems()
+    about = dispatch.AddWindow(
+        {"ID": "SearchAbout", "WindowTitle": "About · Davinci Semantic Search", "Geometry": [280, 220, 650, 365]},
+        [ui.VGroup({"Spacing": 12}, [
+            ui.Label({"ID": "Hardware", "Text": "Đang đọc cấu hình máy…", "WordWrap": True, "Weight": 1,
+                      "StyleSheet": "font-family: Consolas;"}),
+            ui.Label({"ID": "Recognition", "Text": "Chưa có lượt nhận dạng.", "WordWrap": True, "Weight": 0}),
+            ui.Button({"ID": "Done", "Text": "Đóng", "Weight": 0}),
+        ])],
+    )
+    about.Hide()
+    about_widgets = about.GetItems()
     scope = widgets["Scope"]
     scope.AddItem("Nguồn")
     scope.AddItem("Timeline")
@@ -68,6 +84,14 @@ def open_window(resolve, dispatcher_factory, settings: Settings) -> None:
 
     manager = resolve.GetProjectManager()
     current_index: Index | None = None
+    controlled: tuple[Index, str] | None = None
+    recovery: Popen[bytes] | None = None
+    cleanup_pending = False
+    next_cleanup = 0.0
+    hardware: Popen[str] | None = None
+    hardware_deadline = 0.0
+    hardware_read = False
+    closed = False
     snapshot: Snapshot | None = None
     search_project_id = ""
     search_id = ""
@@ -75,13 +99,21 @@ def open_window(resolve, dispatcher_factory, settings: Settings) -> None:
     message = widgets["Message"]
 
     def get_project_index():
-        nonlocal current_index
+        nonlocal current_index, recovery, cleanup_pending, next_cleanup
         project = manager.GetCurrentProject()
         if not project:
             raise RuntimeError("Mở một project DaVinci Resolve trước.")
         path = project_db(settings.data_dir, project.GetUniqueId())
         if current_index is None or current_index.path != path:
+            if controlled:
+                bound, token = controlled
+                run = bound.run_status()
+                if run and run.token == token and (worker_active(bound) or starting(run)):
+                    raise RuntimeError("Cửa sổ đang điều khiển lượt lập chỉ mục của project trước. "
+                                       "Hãy dừng lượt đó hoặc đợi nó hoàn tất.")
             current_index = Index(path)
+            window.WindowTitle = f"Davinci Semantic Search · {project.GetName()}"
+            recovery, cleanup_pending, next_cleanup = None, False, 0.0
             tree.Clear()
             rows.clear()
         return project, current_index
@@ -96,25 +128,61 @@ def open_window(resolve, dispatcher_factory, settings: Settings) -> None:
         return on_event
 
     def update_progress(index: Index) -> None:
-        running = worker_active(index)
+        nonlocal controlled, recovery, cleanup_pending, next_cleanup
+        run = index.run_status()
+        if recovery is not None and recovery.poll() is not None:
+            cleanup_pending = recovery.returncode != 0
+            recovery = None
+            next_cleanup = monotonic() + (3 if cleanup_pending else 30)
+        running = starting(run) or (recovery is None and worker_active(index))
+        stopping = running and run is not None and run.state == "stopping"
+        cancelable = running and run is not None and run.state in STOPPABLE
+        controlled = (index, run.token) if run and (cancelable or stopping) else None
+
+        if cancelable or stopping:
+            next_cleanup = 0.0
+        elif not running and recovery is None and monotonic() >= next_cleanup:
+            recovery = start_recovery(index, settings)
+
         status = index.status()
-        widgets["Index"].Enabled = not running
+        widgets["Index"].Enabled = not running and recovery is None
+        widgets["Stop"].Enabled = cancelable
         widgets["Index"].Text = "Tiếp tục lập chỉ mục" if status.needs_attention else "Lập chỉ mục project"
         names = {"asr": "chờ nhận dạng", "polish": "chờ Codex", "done": "đã hiệu đính",
                  "silent": "không có lời thoại", "offline": "media ngoại tuyến"}
         counts = " · ".join(f"{count} {names[stage]}" for stage, count in status.phases.items())
-        if running:
+        if stopping:
+            activity = "Đang dừng"
+        elif running:
             activity = "Đang lập chỉ mục"
+        elif run and run.state == "stopped":
+            activity = "Đã dừng"
         elif status.requested:
             activity = "Lượt trước chưa hoàn tất"
         elif status.errors:
             activity = f"{len(status.errors)} media cần thử lại"
         else:
             activity = "Chỉ mục"
+        if cleanup_pending:
+            activity += " · Còn file tạm chờ dọn"
         widgets["IndexStatus"].Text = f"{activity} · {counts}" if counts else activity
         widgets["IndexStatus"].ToolTip = "\n".join(
             f"{name} — {detail}" for name, detail in status.errors[:10]
         )
+        about_widgets["Recognition"].Text = describe_recognition(run, running and not stopping)
+
+    def update_hardware():
+        nonlocal hardware, hardware_read
+        if hardware is None:
+            return
+        if hardware.poll() is None:
+            if monotonic() < hardware_deadline:
+                return
+            hardware.kill()
+        result, _ = hardware.communicate()
+        about_widgets["Hardware"].Text = (result.strip() if hardware.returncode == 0 else "") or hardware_fallback(settings)
+        hardware_read = True
+        hardware = None
 
     @handle_errors
     def refresh():
@@ -125,10 +193,50 @@ def open_window(resolve, dispatcher_factory, settings: Settings) -> None:
     def start_index():
         project, index = get_project_index()
         if request_index(index, settings, lambda: scan_media(project)):
-            message.Text = "Đã gửi lượt lập chỉ mục. Bấm Cập nhật tiến độ để xem trạng thái."
+            message.Text = ""
         else:
             message.Text = "Project này đã có lượt lập chỉ mục đang chạy."
         update_progress(index)
+
+    @handle_errors
+    def poll():
+        if current_index is not None:
+            update_progress(current_index)
+        update_hardware()
+
+    @handle_errors
+    def stop():
+        if controlled:
+            index, token = controlled
+            request_stop(index, token)
+            update_progress(index)
+
+    @handle_errors
+    def close():
+        nonlocal closed
+        try:
+            if controlled:
+                request_stop(*controlled)
+        finally:
+            closed = True
+            dispatch.ExitLoop()
+
+    @handle_errors
+    def open_about():
+        nonlocal hardware, hardware_deadline, hardware_read
+        if not hardware_read and hardware is None:
+            try:
+                hardware = start_hardware_probe(settings)
+                hardware_deadline = monotonic() + 8
+            except OSError:
+                about_widgets["Hardware"].Text = hardware_fallback(settings)
+                hardware_read = True
+        about.Show()
+        about.Raise()
+        poll()
+
+    def close_about(event=None):
+        about.Hide()
 
     def append_result(section: str, hit: Hit, result: TimelineHit | None = None) -> None:
         identifier = str(len(rows))
@@ -228,15 +336,32 @@ def open_window(resolve, dispatcher_factory, settings: Settings) -> None:
         }[state]
 
     window.On.Index.Clicked = start_index
+    window.On.Stop.Clicked = stop
     window.On.Refresh.Clicked = refresh
+    window.On.About.Clicked = open_about
     window.On.Query.ReturnPressed = find
     window.On.Search.Clicked = find
     window.On.SelectSource.Clicked = choose_source
     window.On.Marker.Clicked = mark
-    window.On.TranscriptSearch.Close = lambda event: dispatch.ExitLoop()
+    window.On.TranscriptSearch.Close = close
+    about.On.SearchAbout.Close = close_about
+    about.On.Done.Clicked = close_about
     refresh()
     window.Show()
+    next_progress = 0.0
     try:
-        dispatch.RunLoop()
+        while not closed:
+            monitoring = bool(controlled or recovery or cleanup_pending or hardware)
+            dispatch.StepLoop(not monitoring)
+            if monitoring and not closed:
+                now = monotonic()
+                if now >= next_progress:
+                    poll()
+                    next_progress = now + 0.6
+                sleep(0.05)
     finally:
+        if hardware is not None:
+            hardware.kill()
+            hardware.communicate()
+        about.Hide()
         window.Hide()

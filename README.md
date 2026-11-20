@@ -30,7 +30,10 @@ Nếu layout build khác, truyền đường dẫn đến executable được t�
 1. Chọn **Lập chỉ mục project** để quét Media Pool. Audio được đọc từ stream mặc định của tệp, hoặc stream đầu tiên khi không có mặc định.
 2. Chọn **Nguồn** hoặc **Timeline** rồi nhập cụm cần tìm. Có thể gõ không dấu hoặc sai nhẹ. Chọn một kết quả và bấm **Chọn trong Media Pool** để xác định media nguồn. Mốc nguồn tính từ đầu tệp.
 3. Ở chế độ Timeline, kết quả **Trong timeline** hiển thị track và timecode. Chọn một hàng và bấm **Đặt marker tạm**. Marker nằm trên thước timeline ở frame tìm được. Lượt tìm mới trên cùng timeline dọn các marker tạm của công cụ. Các đoạn ngoài điểm cắt hiển thị riêng. Clip phức tạp, tệp nhiều stream âm thanh, ánh xạ kênh khác bản nhận dạng hoặc đoạn giao điểm cắt có thể hiện **Chưa xác minh** nếu công cụ chưa xác định được frame hoặc phạm vi thoại.
-4. Nếu Resolve hoặc worker gián đoạn, mở lại cùng project và chọn **Tiếp tục lập chỉ mục**. Transcript đã lưu được dùng lại. Bấm **Cập nhật tiến độ** để xem trạng thái. Giữ chuột trên dòng trạng thái để xem các lỗi clip. Cơ sở dữ liệu và `worker.log` nằm theo project dưới thư mục dữ liệu.
+4. Bấm **Dừng** hoặc đóng cửa sổ tìm kiếm để dừng lượt lập chỉ mục mà cửa sổ đang điều khiển. Khi mở lại cùng project, chọn **Tiếp tục lập chỉ mục** để dùng lại transcript đã lưu. Giữ chuột trên dòng trạng thái để xem các lỗi clip.
+5. Mở **About** để xem cấu hình máy, khả năng của driver, tình trạng bản chạy Whisper đã cấu hình và backend mà worker thực sự dùng. Nếu lượt nhận dạng chuyển về CPU, cửa sổ hiển thị lý do khi xác định được.
+
+SQLite và `worker.log` nằm theo project dưới thư mục dữ liệu. WAV trích xuất và JSON trung gian nằm trong `projects/<id-project>/scratch/run-<id-lượt>/`. Khi dừng, worker đợi các tiến trình con thoát rồi dọn toàn bộ thư mục của lượt đó. Nếu bị tắt cưỡng bức, lần mở lại sẽ dọn file mồ côi của project và thử lại nếu Windows còn khóa file.
 
 Transcript gốc có thể tìm ngay với nhãn **Chưa hiệu đính**. Bật **Tìm thêm trong bản gốc** để tra cả transcript gốc sau khi hiệu đính. Codex nhận văn bản cùng mã đoạn để sửa lỗi và lặp do nhận dạng. Khi Codex tạm thời không hoạt động, mở lại lượt lập chỉ mục sẽ thử tiếp từ bước đó.
 
