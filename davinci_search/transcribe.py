@@ -11,6 +11,7 @@ import subprocess
 from tempfile import TemporaryDirectory
 import wave
 
+from .diagnostics import DiagnosticLog, ToolFailure, error_code
 from .index import Media, Segment, Transcript
 from .runtime import Settings, run_tool
 
@@ -23,24 +24,27 @@ VULKAN_DEVICE = re.compile(r"ggml_vulkan:\s*(\d+) = (.+?) \(.+?\) \|")
 
 
 class Whisper:
-    def __init__(self, settings: Settings, scratch_dir: Path, report: BackendReport, end: Callable[[], None]):
+    def __init__(self, settings: Settings, scratch_dir: Path, report: BackendReport, end: Callable[[], None],
+                 diagnostics: DiagnosticLog):
         self.settings = settings
         self.scratch_dir = scratch_dir
         self.report = report
         self.end = end
+        self.diagnostics = diagnostics
         self.vulkan = settings.whisper_vulkan
         self.fallback = "" if self.vulkan else "Chưa cấu hình bản Whisper Vulkan."
 
     def transcribe(self, media: Media) -> Transcript:
         settings = self.settings
         if not settings.whisper_model.is_file():
-            raise RuntimeError("Không tìm thấy model whisper.cpp. Kiểm tra cấu hình cài đặt.")
+            raise ToolFailure("Không tìm thấy model whisper.cpp. Kiểm tra cấu hình cài đặt.",
+                              "whisper", "model_missing")
         probe = run_tool([
             settings.ffprobe, "-v", "error", "-select_streams", "a", "-show_entries",
             "stream=index,channels:stream_disposition=default", "-of", "json", "-i", media.path,
         ], timeout=60)
         if probe.returncode:
-            raise RuntimeError("FFprobe không đọc được media.")
+            raise ToolFailure("FFprobe không đọc được media.", "ffprobe", "nonzero_exit", probe.returncode)
         streams = json.loads(probe.stdout).get("streams", [])
         if not streams:
             return Transcript([], 0)
@@ -56,7 +60,7 @@ class Whisper:
                 "-segment_format", "wav", "-reset_timestamps", "1", str(directory / "%08d.wav"),
             ])
             if extraction.returncode:
-                raise RuntimeError("FFmpeg không trích xuất được audio.")
+                raise ToolFailure("FFmpeg không trích xuất được audio.", "ffmpeg", "nonzero_exit", extraction.returncode)
             segments: list[Segment] = []
             sample_offset = 0
             for audio in sorted(directory.glob("*.wav")):
@@ -79,38 +83,44 @@ class Whisper:
         try:
             if self.vulkan:
                 probe = WhisperLog(False, "")
+                code = None
                 try:
                     code = self._run_whisper([self.vulkan, *arguments], probe)
                     if code == 0 and json_output.is_file():
                         result = read_segments(json_output, sample_offset, samples)
                         if probe.reason:
-                            self._use_cpu(probe.reason)
+                            self._use_cpu(probe.reason, probe.failure)
                         return result
                     reason = probe.reason or (
                         f"Whisper Vulkan thoát với mã {code}." if code else "Whisper Vulkan không tạo transcript."
                     )
-                except FileNotFoundError:
+                    failure = probe.failure or ("nonzero_exit" if code else "missing_output")
+                except FileNotFoundError as error:
+                    code, failure = error_code(error), "tool_not_found"
                     reason = "Không tìm thấy bản Whisper Vulkan đã cấu hình."
                 except OSError as error:
-                    code = getattr(error, "winerror", None) or error.errno
+                    code, failure = error_code(error), "os_error"
                     reason = f"Không chạy được Whisper Vulkan (mã {code})." if code else "Không chạy được Whisper Vulkan."
                 except (ValueError, KeyError, TypeError):
+                    failure = "invalid_output"
                     reason = "Whisper Vulkan tạo transcript không hợp lệ."
-                self._use_cpu(reason)
+                self._use_cpu(reason, failure, code)
                 json_output.unlink(missing_ok=True)
 
             code = self._run_whisper(
                 [self.settings.whisper_cpu, *arguments, "-ng"], WhisperLog(True, self.fallback)
             )
             if code or not json_output.is_file():
-                raise RuntimeError(f"whisper.cpp không hoàn tất nhận dạng (mã {code}).")
+                raise ToolFailure(f"whisper.cpp không hoàn tất nhận dạng (mã {code}).", "whisper_cpu",
+                                  "nonzero_exit" if code else "missing_output", code)
             return read_segments(json_output, sample_offset, samples)
         finally:
             self.end()
 
-    def _use_cpu(self, reason: str) -> None:
+    def _use_cpu(self, reason: str, failure: str, code: int | None = None) -> None:
         self.vulkan = None
         self.fallback = reason
+        self.diagnostics.record("backend_fallback", step="whisper_vulkan", reason=failure, code=code, backend="CPU")
         print(f"{reason} Dùng CPU cho lượt lập chỉ mục này.", flush=True)
 
     def _run_whisper(self, command: list[str], probe: WhisperLog) -> int:
@@ -137,6 +147,7 @@ class WhisperLog:
     def __init__(self, cpu: bool, reason: str):
         self.cpu = cpu
         self.reason = reason
+        self.failure = ""
         self.selected: re.Match[str] | None = None
         self.devices: dict[str, str] = {}
 
@@ -150,8 +161,10 @@ class WhisperLog:
         if not self.cpu and line.startswith("whisper_backend_init_gpu:"):
             if "no GPU found" in line:
                 self.reason = "Whisper Vulkan không phát hiện thiết bị GPU."
+                self.failure = "gpu_not_found"
             elif "failed to initialize" in line:
                 self.reason = "Whisper không khởi tạo được backend GPU."
+                self.failure = "gpu_init_failed"
 
     def backend(self) -> tuple[str, str, str]:
         if self.cpu or self.reason:

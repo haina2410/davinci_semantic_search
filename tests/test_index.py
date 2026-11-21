@@ -2,6 +2,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from davinci_search.diagnostics import DiagnosticLog, read_events
 from davinci_search.index import Index, Media, Segment, Transcript
 from davinci_search.polish import PolishError
 from davinci_search.search import search
@@ -52,7 +53,8 @@ class IndexTests(unittest.TestCase):
         def unavailable(_):
             raise PolishError("Codex unavailable")
 
-        run_queue(self.index, lambda _: Transcript([Segment(1, 100, "He found the door")], 1), unavailable)
+        diagnostics = DiagnosticLog(self.db_path.parent)
+        run_queue(self.index, lambda _: Transcript([Segment(1, 100, "He found the door")], 1), unavailable, diagnostics)
         self.assertTrue(self.index.status().needs_attention)
         self.assertEqual(search(self.index.searchable(), "found the door")[0].version, "pending")
         self.index.queue([self.media])
@@ -60,6 +62,10 @@ class IndexTests(unittest.TestCase):
         self.assertFalse(search(self.index.searchable(), "found the door"))
         self.assertEqual(search(self.index.searchable(), "teh door")[0].version, "polished")
         self.assertEqual(search(self.index.searchable(), "found the door", include_original=True)[0].version, "raw")
+        self.assertFalse(self.index.status().errors)
+        events = read_events(self.db_path.parent, "", False)
+        self.assertEqual([(event["event"], event["step"], event["error"]) for event in events],
+                         [("media_error", "codex", "PolishError")])
 
     def test_only_one_worker_can_claim_project(self):
         with claim_worker(self.index.path) as first:

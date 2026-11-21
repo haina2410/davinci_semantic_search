@@ -7,6 +7,7 @@ from subprocess import Popen
 from time import monotonic, sleep
 from uuid import uuid4
 
+from .diagnostics import export_bundle, open_export_folder
 from .hardware import describe_recognition, hardware_fallback, start_hardware_probe
 from .index import Index, Media, project_db
 from .resolve import read_timeline, scan_media, select_source
@@ -58,7 +59,11 @@ def open_window(resolve, dispatcher_factory, settings: Settings) -> None:
         [ui.VGroup({"Spacing": 12}, [
             ui.TextEdit({"ID": "AboutDetails", "ReadOnly": True, "Weight": 1,
                          "StyleSheet": "font-family: Consolas;"}),
-            ui.Button({"ID": "Done", "Text": "Close", "Weight": 0}),
+            ui.HGroup({"Weight": 0}, [
+                ui.Label({"ID": "ExportStatus", "Text": "", "WordWrap": True, "Weight": 1}),
+                ui.Button({"ID": "ExportLogs", "Text": "Export logs", "Weight": 0}),
+                ui.Button({"ID": "Done", "Text": "Close", "Weight": 0}),
+            ]),
         ])],
     )
     about.Hide()
@@ -251,6 +256,22 @@ def open_window(resolve, dispatcher_factory, settings: Settings) -> None:
     def close_about(event=None):
         about.Hide()
 
+    def export_logs(event=None):
+        status = about_widgets["ExportStatus"]
+        try:
+            project = manager.GetCurrentProject() if manager else None
+            project_id = project.GetUniqueId() if project else ""
+            key = project_db(settings.data_dir, project_id).parent.name if project_id else ""
+            path = export_bundle(settings.config_file.parent, key, python=settings.python)
+        except Exception:
+            status.Text = "Could not export logs. Check that the installation folder is writable."
+            return
+        status.Text = f"Exported {path.name}"
+        try:
+            open_export_folder(path)
+        except OSError:
+            status.Text = f"Exported to {path.parent}"
+
     def append_result(section: str, hit: Hit, result: TimelineHit | None = None) -> None:
         identifier = str(len(rows))
         rows[identifier] = (hit, result)
@@ -362,6 +383,7 @@ def open_window(resolve, dispatcher_factory, settings: Settings) -> None:
     window.On.TranscriptSearch.Close = close
     about.On.SearchAbout.Close = close_about
     about.On.Done.Clicked = close_about
+    about.On.ExportLogs.Clicked = export_logs
     refresh()
     window.Show()
     next_progress = 0.0

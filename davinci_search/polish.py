@@ -8,6 +8,7 @@ from pathlib import Path
 from subprocess import TimeoutExpired
 from tempfile import TemporaryDirectory
 
+from .diagnostics import ToolFailure, error_code
 from .runtime import run_tool
 
 
@@ -37,8 +38,11 @@ summarize, translate, or rewrite style. The context rows are read-only. Return o
 """
 
 
-class PolishError(RuntimeError):
+class PolishError(ToolFailure):
     """The raw transcript should remain available for a later retry."""
+
+    def __init__(self, message: str, reason: str = "invalid_output", code: int | None = None):
+        super().__init__(message, "codex", reason, code)
 
 
 class CodexUnavailable(PolishError):
@@ -84,7 +88,9 @@ class Codex:
                         "--output-schema", str(schema), "--output-last-message", str(output), "-",
                     ], cwd=directory, prompt=f"{INSTRUCTIONS}\n{request}", timeout=240, quiet=True)
                     if response.returncode or not output.is_file():
-                        raise PolishError(f"Codex chưa hiệu đính được (mã {response.returncode}).")
+                        raise PolishError(f"Codex chưa hiệu đính được (mã {response.returncode}).",
+                                          "nonzero_exit" if response.returncode else "missing_output",
+                                          response.returncode)
                     received = json.loads(output.read_text(encoding="utf-8"))["segments"]
                     expected = {item["id"] for item in targets}
                     checked = {}
@@ -98,10 +104,16 @@ class Codex:
                 except PolishError:
                     raise
                 except FileNotFoundError as error:
-                    raise CodexUnavailable("Không tìm thấy Codex CLI. Kiểm tra cấu hình cài đặt.") from error
-                except (OSError, ValueError, KeyError, TypeError, TimeoutExpired) as error:
+                    raise CodexUnavailable("Không tìm thấy Codex CLI. Kiểm tra cấu hình cài đặt.",
+                                           "tool_not_found", error_code(error)) from error
+                except TimeoutExpired as error:
+                    raise PolishError("Codex gián đoạn hoặc trả về dữ liệu không hợp lệ.", "timeout") from error
+                except OSError as error:
+                    raise PolishError("Codex gián đoạn hoặc trả về dữ liệu không hợp lệ.",
+                                      "os_error", error_code(error)) from error
+                except (ValueError, KeyError, TypeError) as error:
                     raise PolishError("Codex gián đoạn hoặc trả về dữ liệu không hợp lệ.") from error
                 edits.update(checked)
         if not any(edits.values()) and any(raw.values()):
-            raise PolishError("Codex trả về toàn bộ transcript rỗng.")
+            raise PolishError("Codex trả về toàn bộ transcript rỗng.", "empty_output")
         return edits

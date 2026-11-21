@@ -18,6 +18,14 @@ $archive = Join-Path $directory $archiveName
 
 & git -C $repo archive --format=zip "--output=$archive" "--prefix=davinci-semantic-search-$Version/" $tag -- README.md davinci_search scripts/install.ps1 scripts/uninstall.ps1 scripts/installation.ps1 scripts/resolve_entry.py
 if ($LASTEXITCODE -ne 0) { throw "Could not package tag $Version." }
+Add-Type -AssemblyName System.IO.Compression, System.IO.Compression.FileSystem
+$package = [IO.Compression.ZipFile]::Open($archive, [IO.Compression.ZipArchiveMode]::Update)
+try {
+    $entry = $package.CreateEntry("davinci-semantic-search-$Version/version.txt")
+    $writer = [IO.StreamWriter]::new($entry.Open())
+    try { $writer.WriteLine($Version) } finally { $writer.Dispose() }
+}
+finally { $package.Dispose() }
 $hash = (Get-FileHash -LiteralPath $archive -Algorithm SHA256).Hash.ToLowerInvariant()
 $hashFile = "$archive.sha256"
 Set-Content -LiteralPath $hashFile -Value "$hash  $archiveName" -Encoding Ascii

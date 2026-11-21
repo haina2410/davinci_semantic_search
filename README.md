@@ -48,7 +48,11 @@ SQLite và `worker.log` nằm theo project dưới thư mục dữ liệu. WAV t
 
 Transcript gốc có thể tìm ngay với nhãn **Chưa hiệu đính**. Bật **Tìm thêm trong bản gốc** để tra cả transcript gốc sau khi hiệu đính. Codex nhận văn bản cùng mã đoạn để sửa lỗi và lặp do nhận dạng. Khi Codex tạm thời không hoạt động, mở lại lượt lập chỉ mục sẽ thử tiếp từ bước đó.
 
-Nếu cửa sổ script không mở, xem `resolve-script-error.log` trong thư mục chứa `settings.json` của bản cài và Resolve Console.
+### Xuất log để gửi hỗ trợ
+
+Trong **About**, bấm **Export logs**. Công cụ tạo một tệp ZIP trong thư mục `exports` của bản cài và mở thư mục đó trong Explorer. Gửi tệp ZIP cho người hỗ trợ. Nếu plugin không mở được, hãy nhấp đúp **Davinci Semantic Search - Export logs** trong thư mục cài đặt (mặc định `%LOCALAPPDATA%\DavinciSemanticSearch`).
+
+Gói có sự kiện khởi động, phiên bản plugin và Resolve nếu xác định được, thông tin GPU, backend và các lỗi xử lý trong 72 giờ gần nhất, tối đa 5.000 sự kiện lưu trên một bản cài. Trong **About**, các sự kiện lập chỉ mục thuộc project đang mở. Cách xuất từ Windows lấy project có hoạt động lập chỉ mục gần nhất. Gói không chứa tên project hoặc media, đường dẫn cá nhân, transcript, truy vấn tìm kiếm hay tệp dữ liệu project. Lịch sử chẩn đoán bắt đầu từ khi cập nhật lên bản có tính năng này.
 
 ## Kiểm tra
 

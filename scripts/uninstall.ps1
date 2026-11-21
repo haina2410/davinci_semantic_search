@@ -73,6 +73,11 @@ if ($record) {
 if ($launcher -and $PSCmdlet.ShouldProcess($menuScript, 'Remove Resolve menu entry')) {
     Remove-Item -LiteralPath $menuScript
 }
+$exportShortcut = Join-Path $InstallDir 'Davinci Semantic Search - Export logs.lnk'
+if ($record.export_shortcut -eq $exportShortcut -and (Test-Path -LiteralPath $exportShortcut -PathType Leaf) -and
+        $PSCmdlet.ShouldProcess($exportShortcut, 'Remove the log export shortcut')) {
+    Remove-Item -LiteralPath $exportShortcut
+}
 foreach ($target in $targets) {
     if ($PSCmdlet.ShouldProcess($target.FullName, 'Remove installed plugin files')) {
         Remove-Item -LiteralPath $target.FullName -Recurse -Force

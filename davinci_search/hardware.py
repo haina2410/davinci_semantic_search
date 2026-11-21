@@ -6,6 +6,7 @@ import ctypes as c
 from ctypes import wintypes
 from dataclasses import dataclass
 from io import TextIOWrapper
+import json
 import os
 from pathlib import Path
 import platform
@@ -241,4 +242,8 @@ def hardware_fallback(settings: Settings) -> str:
 if __name__ == "__main__":
     if isinstance(sys.stdout, TextIOWrapper):
         sys.stdout.reconfigure(encoding="utf-8", errors="backslashreplace")
-    print(describe_hardware(inspect_hardware(), Settings.load(Path(sys.argv[1]))))
+    if sys.argv[1] == "--adapters":
+        adapters = read_adapters() if os.name == "nt" else None
+        print(json.dumps([adapter.name for adapter in adapters] if adapters is not None else None))
+    else:
+        print(describe_hardware(inspect_hardware(), Settings.load(Path(sys.argv[1]))))

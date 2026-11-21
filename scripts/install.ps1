@@ -40,8 +40,12 @@ if ($record -and $record.menu_script -ne $menuScript) {
 }
 
 $configurationFile = Join-Path $InstallDir 'settings.json'
+$exportShortcut = Join-Path $InstallDir 'Davinci Semantic Search - Export logs.lnk'
 if (-not $record -and (Test-Path -LiteralPath $configurationFile)) {
     throw "The installation directory contains an unmanaged settings file: $configurationFile"
+}
+if ($record.export_shortcut -ne $exportShortcut -and (Test-Path -LiteralPath $exportShortcut)) {
+    throw "The installation directory contains an unmanaged shortcut: $exportShortcut"
 }
 $previousFile = if ($launcher.ConfigFile) { $launcher.ConfigFile } else { $configurationFile }
 $previous = if (Test-Path -LiteralPath $previousFile -PathType Leaf) {
@@ -194,6 +198,7 @@ $installation = [ordered]@{
     product = 'davinci-semantic-search'
     root = $InstallDir
     menu_script = $menuScript
+    export_shortcut = $exportShortcut
 }
 $entry = [IO.File]::ReadAllText((Join-Path $PSScriptRoot 'resolve_entry.py'))
 $script = @(
@@ -204,8 +209,22 @@ $script = @(
     ''
     $entry
 ) -join [Environment]::NewLine
+$releaseVersionFile = Join-Path $sourceRoot 'version.txt'
+$releaseVersion = if (Test-Path -LiteralPath $releaseVersionFile -PathType Leaf) {
+    [IO.File]::ReadAllText($releaseVersionFile).Trim()
+}
+if ($releaseVersion -notmatch '^v[0-9]+\.[0-9]+\.[0-9]+$') { $releaseVersion = 'development' }
+$shell = New-Object -ComObject WScript.Shell
+$shortcut = $shell.CreateShortcut($exportShortcut)
+$shortcut.TargetPath = $Python
+$shortcut.Arguments = '-I "' + (Join-Path $moduleDir 'diagnostics.py') + '" "' + $InstallDir + '"'
+$shortcut.WorkingDirectory = $InstallDir
+$shortcut.Description = 'Export DaVinci Semantic Search logs for support'
+Write-AtomicText (Join-Path $InstallDir 'version.txt') $releaseVersion
 Write-AtomicText (Join-Path $InstallDir 'installation.json') ($installation | ConvertTo-Json)
 Write-AtomicText $configurationFile ($configuration | ConvertTo-Json)
+$shortcut.Save()
 Write-AtomicText $menuScript $script
 Write-Output "Resolve script: $menuScript"
-Write-Output "Index and logs: $DataDir"
+Write-Output "Project index: $DataDir"
+Write-Output "Export logs shortcut: $exportShortcut"

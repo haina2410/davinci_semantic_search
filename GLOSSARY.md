@@ -27,3 +27,6 @@ Một lần media nguồn xuất hiện trong timeline. Cùng một media nguồ
 
 **Timeline marker**  
 Dấu đánh dấu tạm thời tại một vị trí cố định trên thước timeline, thuộc lượt tìm kiếm đã tạo ra nó.
+
+**Gói chẩn đoán**\
+Tệp người dùng xuất để gửi cho người hỗ trợ, gồm các sự kiện của plugin và thông tin môi trường cần để xác định nguyên nhân sự cố.

@@ -13,6 +13,7 @@ import time
 from typing import Callable, Generator
 from uuid import uuid4
 
+from .diagnostics import DiagnosticLog, ToolFailure
 from .index import Index, Media, RunStatus, Transcript
 from .polish import Codex, CodexUnavailable
 from .process_tree import start_queue_process
@@ -97,6 +98,8 @@ def request_index(index: Index, settings: Settings, scan: Callable[[], list[Medi
             return False
         token = uuid4().hex
         index.queue(scan(), token)
+    diagnostics = DiagnosticLog(settings.config_file.parent, index.path.parent.name, token)
+    diagnostics.record("index_requested")
     root = Path(__file__).resolve().parent.parent
     log_file = index.path.with_name("worker.log")
     try:
@@ -108,7 +111,8 @@ def request_index(index: Index, settings: Settings, scan: Callable[[], list[Medi
                 start_new_session=os.name != "nt",
             )
         Thread(target=process.wait, daemon=True).start()
-    except OSError:
+    except OSError as error:
+        diagnostics.failure("worker_error", "worker_launch", error)
         if not index.change_run(token, ("starting",), "failed"):
             index.change_run(token, ("stopping",), "stopped")
         raise
@@ -118,12 +122,18 @@ def request_index(index: Index, settings: Settings, scan: Callable[[], list[Medi
 def run_queue(
     index: Index, transcribe: Callable[[Media], Transcript],
     polish: Callable[[dict[int, str]], dict[int, str]],
+    diagnostics: DiagnosticLog | None = None,
 ) -> None:
     polish_unavailable: str | None = None
 
     def check_revision(media: Media) -> None:
         if Media.from_path(media.key, media.name, media.path).revision != media.revision:
-            raise RuntimeError("Media thay đổi hoặc mất kết nối. Hãy quét lại Media Pool.")
+            raise ToolFailure("Media thay đổi hoặc mất kết nối. Hãy quét lại Media Pool.", "media", "changed")
+
+    def record_failure(media: Media, step: str, error: Exception) -> None:
+        if diagnostics is not None:
+            diagnostics.failure("media_error", step, error)
+        index.record_error(media, str(error))
 
     def finish_polish(media: Media) -> None:
         nonlocal polish_unavailable
@@ -137,9 +147,9 @@ def run_queue(
             index.save_polish(media, edits)
         except CodexUnavailable as error:
             polish_unavailable = str(error)
-            index.record_error(media, polish_unavailable)
+            record_failure(media, "codex", error)
         except (OSError, ValueError, RuntimeError) as error:
-            index.record_error(media, str(error))
+            record_failure(media, "codex", error)
 
     for media in index.pending("polish"):
         finish_polish(media)
@@ -150,7 +160,7 @@ def run_queue(
             check_revision(media)
             index.save_transcript(media, transcript)
         except (OSError, ValueError, KeyError, RuntimeError, subprocess.TimeoutExpired) as error:
-            index.record_error(media, str(error))
+            record_failure(media, "transcription", error)
             continue
         if transcript.segments:
             finish_polish(media)
@@ -158,23 +168,32 @@ def run_queue(
 
 
 def run_worker(config_file: Path, database: Path, token: str) -> None:
-    settings = Settings.load(config_file)
-    index = Index(database)
-    deadline = time.monotonic() + STARTUP_SECONDS
-    while time.monotonic() < deadline:
-        with claim_worker(index.path) as acquired:
-            if acquired:
-                supervise(index, settings, token)
-                return
-        time.sleep(0.1)
-    index.change_run(token, ("starting",), "failed")
+    diagnostics = DiagnosticLog(config_file.parent, database.parent.name, token)
+    try:
+        settings = Settings.load(config_file)
+        index = Index(database)
+        deadline = time.monotonic() + STARTUP_SECONDS
+        while time.monotonic() < deadline:
+            with claim_worker(index.path) as acquired:
+                if acquired:
+                    supervise(index, settings, token, diagnostics)
+                    return
+            time.sleep(0.1)
+        index.change_run(token, ("starting",), "failed")
+        diagnostics.record("worker_error", step="worker_startup", reason="lock_timeout")
+    except Exception as error:
+        diagnostics.failure("worker_error", "worker", error)
+        raise
 
 
-def supervise(index: Index, settings: Settings, token: str) -> None:
+def supervise(index: Index, settings: Settings, token: str, diagnostics: DiagnosticLog) -> None:
     if not index.change_run(token, ("starting",), "running"):
-        index.change_run(token, ("stopping",), "stopped")
+        if index.change_run(token, ("stopping",), "stopped"):
+            diagnostics.record("index_ended", reason="stopped")
         return
+    diagnostics.record("index_started")
     outcome = "failed"
+    exit_code = None
     try:
         cleanup_scratch(index.path)
         if stop_requested(index, token):
@@ -185,7 +204,8 @@ def supervise(index: Index, settings: Settings, token: str) -> None:
                 if stop_requested(index, token):
                     break
                 time.sleep(0.15)
-            if process.returncode == 0:
+            exit_code = process.returncode
+            if exit_code == 0:
                 outcome = "finished"
     finally:
         # Windows can release file handles shortly after the job reports zero processes.
@@ -197,7 +217,9 @@ def supervise(index: Index, settings: Settings, token: str) -> None:
             time.sleep(0.1)
         index.end_recognition(token)
         if not index.change_run(token, ("running",), outcome):
-            index.change_run(token, ("stopping",), "stopped")
+            if index.change_run(token, ("stopping",), "stopped"):
+                outcome = "stopped"
+        diagnostics.record("index_ended", reason=outcome, code=exit_code)
 
 
 def run_queue_process(config_file: Path, database: Path, token: str) -> None:
@@ -210,10 +232,22 @@ def run_queue_process(config_file: Path, database: Path, token: str) -> None:
             os.killpg(os.getpgrp(), signal.SIGKILL)
 
         Thread(target=watch_supervisor, daemon=True).start()
-    settings = Settings.load(config_file)
-    index = Index(database)
-    scratch = scratch_path(database) / f"run-{token}"
-    whisper = Whisper(settings, scratch, lambda backend, device, reason: index.report_backend(
-        token, backend, device, reason
-    ), lambda: index.end_recognition(token))
-    run_queue(index, whisper.transcribe, Codex(settings.codex, scratch).polish)
+    diagnostics = DiagnosticLog(config_file.parent, database.parent.name, token)
+    try:
+        settings = Settings.load(config_file)
+        index = Index(database)
+        scratch = scratch_path(database) / f"run-{token}"
+        last_backend = ""
+
+        def report_backend(backend: str, device: str, reason: str) -> None:
+            nonlocal last_backend
+            index.report_backend(token, backend, device, reason)
+            if backend and backend != last_backend:
+                last_backend = backend
+                diagnostics.record("transcription_backend", backend=backend)
+
+        whisper = Whisper(settings, scratch, report_backend, lambda: index.end_recognition(token), diagnostics)
+        run_queue(index, whisper.transcribe, Codex(settings.codex, scratch).polish, diagnostics)
+    except Exception as error:
+        diagnostics.failure("worker_error", "queue", error)
+        raise
