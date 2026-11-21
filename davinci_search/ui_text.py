@@ -1,6 +1,29 @@
-"""Render diagnostics from current and saved indexing runs in English."""
+"""Render search and indexing status in English."""
 
 import re
+
+from .index import IndexStatus
+
+
+def empty_search_message(status: IndexStatus, *, has_transcripts: bool, indexing: bool) -> str:
+    if not status.phases:
+        return "No media indexed. Click Index Project to scan the Media Pool."
+
+    awaiting_transcription = status.phases.get("asr", 0)
+    if awaiting_transcription:
+        clips = "clip still needs" if awaiting_transcription == 1 else "clips still need"
+        prefix = "No match in indexed dialogue. " if has_transcripts else ""
+        pending = f"{prefix}{awaiting_transcription} {clips} transcription."
+        if indexing:
+            return f"{pending} Search again as indexing progresses."
+        action = "Resume Indexing" if status.needs_attention else "Index Project"
+        return f"{pending} Click {action} to continue."
+
+    if has_transcripts:
+        return "No matching dialogue found. Try a shorter phrase."
+    if status.phases.get("offline"):
+        return "No searchable dialogue. Relink offline media in Resolve, then index the project again."
+    return "Indexing found no spoken dialogue in this project."
 
 
 DIAGNOSTICS = {

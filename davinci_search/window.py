@@ -11,13 +11,13 @@ from time import monotonic, sleep
 
 from .diagnostics import export_bundle, open_export_folder
 from .hardware import describe_recognition, hardware_fallback, start_hardware_probe
-from .index import Index, Media, project_db
+from .index import Index, IndexStatus, Media, project_db
 from .resolve import read_timeline, scan_media, select_source, source_timecode
 from .runtime import Settings
 from .search import Hit, search
 from .timeline import Snapshot, TimelineHit, clear_search_markers, mark_search_result, project_hits, timecode
 from .timeline_audit import audit_timeline, canonical_path
-from .ui_text import english_diagnostic
+from .ui_text import empty_search_message, english_diagnostic
 from .worker import STOPPABLE, request_index, request_stop, start_recovery, starting, worker_active
 
 
@@ -42,7 +42,7 @@ def open_window(resolve, dispatcher_factory, settings: Settings) -> None:
                 ui.Button({"ID": "About", "Text": "About", "Weight": 0}),
             ]),
             ui.HGroup({"Weight": 0}, [
-                ui.ComboBox({"ID": "Scope", "Weight": 0}),
+                ui.ComboBox({"ID": "Scope", "Events": {"CurrentIndexChanged": True}, "Weight": 0}),
                 ui.LineEdit({"ID": "Query", "PlaceholderText": "Search Vietnamese or English dialogue"}),
                 ui.Button({"ID": "Search", "Text": "Search", "Weight": 0}),
             ]),
@@ -110,8 +110,10 @@ def open_window(resolve, dispatcher_factory, settings: Settings) -> None:
     message = widgets["Message"]
 
     def clear_results():
-        nonlocal copy_target
+        nonlocal copy_target, snapshot, search_project_id
         copy_target = None
+        snapshot = None
+        search_project_id = ""
         rows.clear()
         tree.Clear()
         update_result_actions()
@@ -127,8 +129,8 @@ def open_window(resolve, dispatcher_factory, settings: Settings) -> None:
                 bound, token = controlled
                 run = bound.run_status()
                 if run and run.token == token and (worker_active(bound) or starting(run)):
-                    raise RuntimeError("This window is still indexing the previous project. "
-                                       "Stop indexing or wait for it to finish.")
+                    raise RuntimeError("Indexing is running for the previous project. "
+                                       "Reopen the search window to work in the current project.")
             current_index = Index(path)
             window.WindowTitle = f"Davinci Semantic Search · {project.GetName()}"
             recovery, cleanup_pending, next_cleanup = None, False, 0.0
@@ -150,7 +152,7 @@ def open_window(resolve, dispatcher_factory, settings: Settings) -> None:
         if details.PlainText != text:
             details.PlainText = text
 
-    def update_progress(index: Index) -> None:
+    def update_progress(index: Index) -> tuple[IndexStatus, bool]:
         nonlocal controlled, recovery, cleanup_pending, next_cleanup, recognition_text
         run = index.run_status()
         if recovery is not None and recovery.poll() is not None:
@@ -196,6 +198,7 @@ def open_window(resolve, dispatcher_factory, settings: Settings) -> None:
         )
         recognition_text = describe_recognition(run, running and not stopping)
         update_about()
+        return status, running and not stopping
 
     def update_hardware():
         nonlocal hardware, hardware_text
@@ -240,12 +243,8 @@ def open_window(resolve, dispatcher_factory, settings: Settings) -> None:
     @handle_errors
     def close():
         nonlocal closed
-        try:
-            if controlled:
-                request_stop(*controlled)
-        finally:
-            closed = True
-            dispatch.ExitLoop()
+        closed = True
+        dispatch.ExitLoop()
 
     @handle_errors
     def open_about():
@@ -305,20 +304,24 @@ def open_window(resolve, dispatcher_factory, settings: Settings) -> None:
     @handle_errors
     def find():
         nonlocal snapshot, search_project_id
-        project, index = get_project_index()
+        clear_results()
         query = widgets["Query"].Text.strip()
         if not query:
             message.Text = "Enter dialogue to search for."
             return
+        project, index = get_project_index()
         only_timeline = scope.CurrentIndex == 1
-        timeline = project.GetCurrentTimeline()
+        timeline = project.GetCurrentTimeline() if only_timeline else None
         if only_timeline and not timeline:
             raise RuntimeError("Open a timeline to search its dialogue.")
-        update_progress(index)
-        hits = search(index.searchable(), query)
-        snapshot = inspect_timeline(timeline) if only_timeline and hits else None
+        status, indexing = update_progress(index)
+        transcripts = index.searchable()
+        hits = search(transcripts, query)
+        if not hits:
+            message.Text = empty_search_message(status, has_transcripts=bool(transcripts), indexing=indexing)
+            return
 
-        clear_results()
+        snapshot = inspect_timeline(timeline) if timeline else None
         search_project_id = project.GetUniqueId()
         if snapshot:
             results = project_hits(snapshot, hits)
@@ -333,7 +336,14 @@ def open_window(resolve, dispatcher_factory, settings: Settings) -> None:
                 append_result("Source", hit)
         result_count = len(rows)
         result_label = "result" if result_count == 1 else "results"
-        message.Text = f"{result_count} {result_label}" if result_count else "No matching dialogue found."
+        message.Text = f"{result_count} {result_label}"
+
+    def change_scope(event=None):
+        if widgets["Query"].Text.strip():
+            find()
+        else:
+            clear_results()
+            message.Text = ""
 
     def selected_result() -> tuple[Hit, TimelineHit | None] | None:
         selection = tree.SelectedItems()
@@ -447,7 +457,7 @@ def open_window(resolve, dispatcher_factory, settings: Settings) -> None:
     window.On.About.Clicked = open_about
     window.On.Query.ReturnPressed = find
     window.On.Search.Clicked = find
-    window.On.Scope.CurrentIndexChanged = update_result_actions
+    window.On.Scope.CurrentIndexChanged = change_scope
     window.On.Results.ItemSelectionChanged = update_result_actions
     window.On.SelectSource.Clicked = choose_source
     window.On.CopySourceTimecode.Clicked = copy_source_timecode
