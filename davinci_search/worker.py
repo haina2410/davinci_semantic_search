@@ -17,7 +17,7 @@ from .diagnostics import DiagnosticLog, ToolFailure
 from .index import Index, Media, RunStatus, Transcript
 from .polish import Codex, CodexUnavailable
 from .process_tree import start_queue_process
-from .runtime import Settings
+from .runtime import Settings, python_module_command
 from .scratch import cleanup_scratch, run_scratch, scratch_path
 from .transcribe import Whisper
 
@@ -72,7 +72,7 @@ def recover_scratch(index: Index) -> bool:
 def start_recovery(index: Index, settings: Settings) -> subprocess.Popen[bytes]:
     root = Path(__file__).resolve().parent.parent
     return subprocess.Popen(
-        [settings.python, "-m", "davinci_search", "cleanup", "--db", str(index.path)],
+        python_module_command(settings.python, "davinci_search", "cleanup", "--db", str(index.path)),
         stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, cwd=root,
         creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0,
     )
@@ -88,8 +88,8 @@ def stop_requested(index: Index, token: str) -> bool:
 
 
 def worker_command(settings: Settings, index: Index, command: str, token: str) -> list[str]:
-    return [settings.python, "-u", "-m", "davinci_search", command,
-            "--config", str(settings.config_file), "--db", str(index.path), "--run", token]
+    return python_module_command(settings.python, "davinci_search", command,
+                                 "--config", str(settings.config_file), "--db", str(index.path), "--run", token)
 
 
 def request_index(index: Index, settings: Settings, scan: Callable[[], list[Media]]) -> bool:

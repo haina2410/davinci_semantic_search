@@ -4,22 +4,32 @@ Tìm lời thoại Việt–Anh trong Media Pool và timeline DaVinci Resolve. W
 
 ## Cài trên Windows
 
-Cần DaVinci Resolve Studio có Fusion UIManager, Python 3.10+ 64-bit, FFmpeg và FFprobe, và Codex CLI đã đăng nhập. Tải ZIP Windows x64 từ GitHub Releases, đối chiếu SHA-256 của phiên bản và giải nén. Trong PowerShell ở thư mục vừa giải nén, chạy lệnh dưới đây. [GitHub Releases](https://github.com/haina2410/davinci_semantic_search/releases) · [Codex CLI](https://developers.openai.com/codex/cli)
+Trên Windows x64, cài sẵn DaVinci Resolve Studio 21.0.x trở lên và kết nối Internet cho lần cài đầu. Tải ZIP từ GitHub Releases, đối chiếu SHA-256 của phiên bản và giải nén. Trong PowerShell ở thư mục vừa giải nén, chạy lệnh dưới đây. [GitHub Releases](https://github.com/haina2410/davinci_semantic_search/releases)
 
 ```powershell
-.\scripts\install.ps1
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\install.ps1
 ```
 
-Installer tải và kiểm tra SHA-256 của whisper.cpp x64 chạy CPU và model đa ngôn ngữ `large-v3-turbo-q5_0` (khoảng 547 MiB). Mặc định, ứng dụng được cài vào `%LOCALAPPDATA%\DavinciSemanticSearch`. Mở lại Resolve nếu mục **Davinci Semantic Search** chưa hiện dưới **Workspace → Scripts**.
+Từ Resolve Studio 21.1, installer ưu tiên Python đi kèm Resolve khi cài mới. Installer tự tải các tệp còn thiếu gồm FFmpeg/FFprobe, whisper.cpp x64 chạy CPU và model đa ngôn ngữ `large-v3-turbo-q5_0` (khoảng 547 MiB). Các gói tải về được đối chiếu SHA-256 trước khi dùng. Mặc định, ứng dụng được cài vào `%LOCALAPPDATA%\DavinciSemanticSearch`. Mở lại Resolve nếu mục **Davinci Semantic Search** chưa hiện dưới **Workspace → Scripts**.
 
-Dùng `-InstallDir` để chọn thư mục cài riêng và `-DataDir` để chọn nơi lưu chỉ mục. Có thể chỉ định các bản chạy có sẵn qua `-Python`, `-FFmpeg`, `-FFprobe`, `-Codex`, `-WhisperCpu` hoặc `-WhisperModel`. Với bản Resolve portable, dùng cùng giá trị `-ScriptsDir` trỏ tới thư mục `Fusion\Scripts\Utility` của bản đó khi cài, nâng cấp và gỡ.
+Bạn có thể lập chỉ mục và tìm transcript gốc ngay sau khi cài. Hiệu đính tự động cần cài và đăng nhập Codex CLI riêng. **About** hiển thị trạng thái Codex CLI và phần hiệu đính. [Codex CLI](https://developers.openai.com/codex/cli)
+
+Dùng `-InstallDir` để chọn thư mục cài riêng và `-DataDir` để chọn nơi lưu chỉ mục. Nếu Resolve ở vị trí tùy chỉnh, dùng `-ResolveDir` trỏ tới thư mục chứa `Resolve.exe`. Có thể chỉ định các bản chạy có sẵn qua `-Python`, `-FFmpeg`, `-FFprobe`, `-Codex`, `-WhisperCpu` hoặc `-WhisperModel`. Với bản Resolve portable, dùng cùng giá trị `-ScriptsDir` trỏ tới thư mục `Fusion\Scripts\Utility` của bản đó khi cài, nâng cấp và gỡ.
+
+### Resolve Studio 21.0.x
+
+Installer chạy `fuscript.exe` để kiểm tra Resolve có nạp được Python 3.10 trở lên, 64-bit, rồi in phiên bản nếu kiểm tra thành công. Nếu Resolve chưa nạp được Python phù hợp, installer hỏi trước khi tải và cài Python 3.14.10 x64 cho tất cả người dùng Windows. Windows có thể yêu cầu quyền quản trị. `-Python` chỉ chọn Python cho tiến trình nền và shortcut xuất log.
+
+Để cài thủ công, chạy **Windows installer (64-bit)**, chọn **Customize installation** và bật tùy chọn cài Python cho tất cả người dùng. Chạy lại `install.ps1`, khởi động lại Resolve và mở plugin từ **Workspace → Scripts**. [Python 3.14.10 trên python.org](https://www.python.org/downloads/release/python-31410/)
+
+Nếu installer vẫn báo Resolve chưa nạp được Python sau khi cài, mở **Workspace → Console**, chọn **Py3** và chạy `import sys; print(sys.version)` nếu tùy chọn này xuất hiện. Nếu máy có nhiều bản Resolve, truyền `-ResolveDir` của bản 21.0.x khi chạy lại installer.
 
 ### Dùng GPU qua Vulkan
 
 CPU là mặc định khi cài mới. Để dùng GPU qua Vulkan, cài với tùy chọn dưới đây. Installer tải gói Whisper Vulkan v1.9.2 do Subtitle Edit build và kiểm tra SHA-256 trước khi giải nén. [Gói Whisper Vulkan Windows x64](https://github.com/SubtitleEdit/support-files/releases/tag/whispercpp-192)
 
 ```powershell
-.\scripts\install.ps1 -EnableVulkan
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\install.ps1 -EnableVulkan
 ```
 
 Gói Vulkan đã được thử trên RTX 5060 với Windows và driver NVIDIA 610.88. Laptop AMD vẫn cần kiểm chứng. Bạn cũng có thể trỏ tới bản build của mình với `-WhisperVulkan` và giữ nguyên các DLL đi kèm. Worker tự chuyển về CPU nếu Vulkan lỗi. Chạy lại installer với `-DisableVulkan` để chọn CPU.
@@ -31,7 +41,7 @@ Gói Vulkan đã được thử trên RTX 5060 với Windows và driver NVIDIA 6
 Để gỡ, đóng cửa sổ plugin rồi chạy:
 
 ```powershell
-.\scripts\uninstall.ps1
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\uninstall.ps1
 ```
 
 Script gỡ mục menu và tệp ứng dụng đã cài. Media nguồn, chỉ mục, transcript, log, cấu hình và model được giữ lại. Chạy cài lại với cùng thư mục cài đặt để dùng tiếp dữ liệu.

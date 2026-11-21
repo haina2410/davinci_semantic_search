@@ -47,6 +47,11 @@ if ($record) {
                 ($_.PSIsContainer -and $_.Name -match '^whisper-(cpu|vulkan)-v\d+\.\d+\.\d+(\.[0-9a-f]{32}\.staging)?$') -or
                 (-not $_.PSIsContainer -and $_.Name -match '^whisper-(cpu|vulkan)-v\d+\.\d+\.\d+\.zip$')
             })
+        foreach ($name in $record.managed_ffmpeg_runtimes) {
+            if ($name -notmatch '^ffmpeg-\d+\.\d+\.\d+(?:-[0-9a-f]{32})?$') { throw "Invalid managed FFmpeg runtime: $name" }
+            $targets += @(Get-ChildItem -LiteralPath $directory.FullName -Force |
+                Where-Object { $_.Name -eq $name -or $_.Name -eq "$name.zip" })
+        }
     }
     $config = Join-Path $root.FullName 'settings.json'
     $settings = if (Test-Path -LiteralPath $config -PathType Leaf) {
@@ -81,6 +86,18 @@ if ($record.export_shortcut -eq $exportShortcut -and (Test-Path -LiteralPath $ex
 foreach ($target in $targets) {
     if ($PSCmdlet.ShouldProcess($target.FullName, 'Remove installed plugin files')) {
         Remove-Item -LiteralPath $target.FullName -Recurse -Force
+    }
+}
+if ($record.managed_ffmpeg_runtimes) {
+    $remaining = @($record.managed_ffmpeg_runtimes | Where-Object {
+        (Test-Path -LiteralPath (Join-Path $runtime $_)) -or
+        (Test-Path -LiteralPath (Join-Path $runtime "$_.zip"))
+    })
+    $marker = Join-Path $InstallDir 'installation.json'
+    if ($remaining.Count -ne $record.managed_ffmpeg_runtimes.Count -and
+        $PSCmdlet.ShouldProcess($marker, 'Update the installed FFmpeg runtime list')) {
+        $record.managed_ffmpeg_runtimes = $remaining
+        Write-AtomicText $marker ($record | ConvertTo-Json)
     }
 }
 Write-Output 'Project indexes, transcripts, media and the model are preserved.'

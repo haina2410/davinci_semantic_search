@@ -19,6 +19,12 @@ from time import time
 from uuid import uuid4
 from zipfile import ZIP_DEFLATED, ZipFile
 
+if not __package__:
+    # The Windows export shortcut runs this file in an isolated interpreter.
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+from davinci_search.runtime import python_module_command
+
 
 RETENTION_SECONDS = 72 * 60 * 60
 MAX_EVENTS = 5000
@@ -67,8 +73,9 @@ class DiagnosticLog:
                 )""")
                 event_id = db.execute("INSERT INTO events(created, project, details) VALUES (?, ?, ?)",
                                       (now, self.project, json.dumps(details))).lastrowid
-                db.execute("DELETE FROM events WHERE id <= ? OR created < ?",
-                           (event_id - MAX_EVENTS, now - RETENTION_SECONDS))
+                if event_id is not None:
+                    db.execute("DELETE FROM events WHERE id <= ? OR created < ?",
+                               (event_id - MAX_EVENTS, now - RETENTION_SECONDS))
         except (OSError, sqlite3.Error):
             # Diagnostics should never prevent indexing or hide the original failure.
             pass
@@ -104,7 +111,7 @@ def gpu_names(python: str) -> list[str] | None:
     # Keep graphics-driver calls outside the Resolve process.
     try:
         result = subprocess.run(
-            [python, "-X", "utf8", "-m", "davinci_search.hardware", "--adapters"],
+            python_module_command(python, "davinci_search.hardware", "--adapters"),
             cwd=Path(__file__).resolve().parents[1], stdin=subprocess.DEVNULL,
             stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, check=True,
             encoding="utf-8", timeout=3, creationflags=subprocess.CREATE_NO_WINDOW,

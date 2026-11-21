@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Iterator
 import json
 from pathlib import Path
+import shutil
 from subprocess import TimeoutExpired
 from tempfile import TemporaryDirectory
 
@@ -69,6 +70,9 @@ class Codex:
         self.scratch_dir = scratch_dir
 
     def polish(self, raw: dict[int, str]) -> dict[int, str]:
+        executable = shutil.which(self.executable)
+        if not executable:
+            raise CodexUnavailable("Không tìm thấy Codex CLI. Kiểm tra cấu hình cài đặt.", "tool_not_found")
         edits: dict[int, str] = {}
         with TemporaryDirectory(prefix="codex-", dir=self.scratch_dir) as scratch:
             directory = Path(scratch)
@@ -80,7 +84,7 @@ class Codex:
                 try:
                     output.unlink(missing_ok=True)
                     response = run_tool([
-                        self.executable, "exec", "--skip-git-repo-check", "--ephemeral",
+                        executable, "exec", "--skip-git-repo-check", "--ephemeral",
                         "--ignore-user-config", "--ignore-rules", "--sandbox", "read-only",
                         "--disable", "shell_tool", "--disable", "unified_exec",
                         "--disable", "plugins", "--disable", "remote_plugin",

@@ -15,8 +15,9 @@ import subprocess
 import sys
 from uuid import UUID
 
+from .dependencies import describe_dependencies
 from .index import RunStatus
-from .runtime import Settings
+from .runtime import Settings, python_module_command
 from .ui_text import english_diagnostic
 
 
@@ -188,7 +189,7 @@ def whisper_install(executable: str | None) -> str:
     return "Configured, executable found" if shutil.which(executable) else "Configured, executable missing"
 
 
-def describe_hardware(hardware: Hardware, settings: Settings) -> str:
+def describe_hardware(hardware: Hardware, settings: Settings, *, checked: bool = False) -> str:
     def gib(size: int | None) -> str:
         return f"{size / 1024**3:.1f} GiB" if size is not None else UNKNOWN
 
@@ -206,6 +207,8 @@ def describe_hardware(hardware: Hardware, settings: Settings) -> str:
         f"{'CPU':12} {capability(True):22} {whisper_install(settings.whisper_cpu)}",
         f"{'Vulkan':12} {capability(hardware.vulkan):22} {whisper_install(settings.whisper_vulkan)}",
         f"{'CUDA':12} {capability(hardware.cuda):22} {whisper_install(None)}",
+        "",
+        describe_dependencies(settings, checked=checked),
     ))
 
 
@@ -228,7 +231,7 @@ def start_hardware_probe(settings: Settings) -> subprocess.Popen[str]:
     # GPU driver initialization runs outside Resolve even if a driver fails.
     root = Path(__file__).resolve().parent.parent
     return subprocess.Popen(
-        [settings.python, "-X", "utf8", "-m", "davinci_search.hardware", str(settings.config_file)],
+        python_module_command(settings.python, "davinci_search.hardware", str(settings.config_file)),
         stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, cwd=root,
         encoding="utf-8", errors="replace",
         creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0,
@@ -246,4 +249,4 @@ if __name__ == "__main__":
         adapters = read_adapters() if os.name == "nt" else None
         print(json.dumps([adapter.name for adapter in adapters] if adapters is not None else None))
     else:
-        print(describe_hardware(inspect_hardware(), Settings.load(Path(sys.argv[1]))))
+        print(describe_hardware(inspect_hardware(), Settings.load(Path(sys.argv[1])), checked=True))

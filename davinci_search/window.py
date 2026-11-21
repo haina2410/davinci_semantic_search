@@ -55,7 +55,7 @@ def open_window(resolve, dispatcher_factory, settings: Settings) -> None:
     )
     widgets = window.GetItems()
     about = dispatch.AddWindow(
-        {"ID": "SearchAbout", "WindowTitle": "About · Davinci Semantic Search", "Geometry": [280, 220, 650, 365]},
+        {"ID": "SearchAbout", "WindowTitle": "About · Davinci Semantic Search", "Geometry": [280, 220, 650, 420]},
         [ui.VGroup({"Spacing": 12}, [
             ui.TextEdit({"ID": "AboutDetails", "ReadOnly": True, "Weight": 1,
                          "StyleSheet": "font-family: Consolas;"}),
@@ -95,8 +95,8 @@ def open_window(resolve, dispatcher_factory, settings: Settings) -> None:
     next_cleanup = 0.0
     hardware: Popen[str] | None = None
     hardware_deadline = 0.0
-    hardware_read = False
-    hardware_text = "Reading system information…"
+    hardware_text = "Checking system information and dependencies…"
+    resolve_status = f"{'Resolve':18} Connected · {resolve.GetProductName() or 'DaVinci Resolve'}"
     recognition_text = describe_recognition(None, False)
     closed = False
     snapshot: Snapshot | None = None
@@ -136,7 +136,7 @@ def open_window(resolve, dispatcher_factory, settings: Settings) -> None:
 
     def update_about() -> None:
         details = about_widgets["AboutDetails"]
-        text = f"{hardware_text}\n\n{recognition_text}"
+        text = f"{resolve_status}\n{hardware_text}\n\n{recognition_text}"
         if details.PlainText != text:
             details.PlainText = text
 
@@ -188,7 +188,7 @@ def open_window(resolve, dispatcher_factory, settings: Settings) -> None:
         update_about()
 
     def update_hardware():
-        nonlocal hardware, hardware_read, hardware_text
+        nonlocal hardware, hardware_text
         if hardware is None:
             return
         if hardware.poll() is None:
@@ -197,7 +197,6 @@ def open_window(resolve, dispatcher_factory, settings: Settings) -> None:
             hardware.kill()
         result, _ = hardware.communicate()
         hardware_text = (result.strip() if hardware.returncode == 0 else "") or hardware_fallback(settings)
-        hardware_read = True
         hardware = None
         update_about()
 
@@ -240,14 +239,14 @@ def open_window(resolve, dispatcher_factory, settings: Settings) -> None:
 
     @handle_errors
     def open_about():
-        nonlocal hardware, hardware_deadline, hardware_read, hardware_text
-        if not hardware_read and hardware is None:
+        nonlocal hardware, hardware_deadline, hardware_text
+        if hardware is None:
+            hardware_text = "Checking system information and dependencies…"
             try:
                 hardware = start_hardware_probe(settings)
                 hardware_deadline = monotonic() + 8
             except OSError:
                 hardware_text = hardware_fallback(settings)
-                hardware_read = True
         update_about()
         about.Show()
         about.Raise()

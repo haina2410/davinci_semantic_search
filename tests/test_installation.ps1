@@ -10,6 +10,31 @@ $uninstall = Join-Path $repo 'scripts/uninstall.ps1'
 $Python = (Get-Command $Python -CommandType Application | Select-Object -First 1).Source
 
 try {
+    $legacy = (New-Item -ItemType Directory -Path (Join-Path $root 'Resolve 21.0')).FullName
+    $fixture = Join-Path $legacy 'fixture.cs'
+    $resolve = Join-Path $legacy 'Resolve.exe'
+    @'
+using System;
+using System.IO;
+using System.Reflection;
+[assembly: AssemblyFileVersion("21.0.4.5")]
+public static class Fixture {
+    public static int Main(string[] args) {
+        if (args.Length != 4 || args[0] != "-l" || args[1] != "py3" || args[2] != "-x") return 2;
+        string path = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "python.json");
+        if (!File.Exists(path)) return 1;
+        Console.WriteLine("DAVINCI_SEARCH_PYTHON=" + File.ReadAllText(path));
+        return 0;
+    }
+}
+'@ | Set-Content -LiteralPath $fixture
+    & "$env:WINDIR\Microsoft.NET\Framework64\v4.0.30319\csc.exe" /nologo "/out:$resolve" $fixture
+    if ($LASTEXITCODE -ne 0) { throw 'Could not compile the scripting host fixture.' }
+    Copy-Item -LiteralPath $resolve -Destination (Join-Path $legacy 'fuscript.exe')
+    $fixturePython = Join-Path $legacy 'python.json'
+    @{ version = '3.13.0'; executable = (Join-Path $legacy 'not-the-worker.exe') } | ConvertTo-Json -Compress |
+        Set-Content -LiteralPath $fixturePython
+
     $installDir = Join-Path $root 'installed'
     $menu = Join-Path $root 'menu'
     $data = Join-Path $root 'saved index'
@@ -18,15 +43,24 @@ try {
     $menuScript = Join-Path $menu 'Davinci Semantic Search.py'
     $config = Join-Path $installDir 'settings.json'
     $exportShortcut = Join-Path $installDir 'Davinci Semantic Search - Export logs.lnk'
+    $customFFmpegDir = (New-Item -ItemType Directory -Path (Join-Path $installDir 'runtime/ffmpeg-8.1.2') -Force).FullName
+    $customFFmpeg = Join-Path $customFFmpegDir 'ffmpeg.exe'
+    Copy-Item -LiteralPath $Python -Destination $customFFmpeg
     Set-Content -LiteralPath $model -Value 'fixture'
     Set-Content -LiteralPath $source -Value 'fixture'
     $options = @{
-        InstallDir = $installDir; ScriptsDir = $menu; DataDir = $data
-        Python = $Python; FFmpeg = $Python; FFprobe = $Python; Codex = $Python
+        InstallDir = $installDir; ScriptsDir = $menu; DataDir = $data; ResolveDir = $legacy
+        Python = $Python; FFmpeg = $customFFmpeg; FFprobe = $Python
         WhisperCpu = $Python; WhisperModel = $model
     }
-    & $install @options
+    $testPath = $env:Path
+    try {
+        $env:Path = "$env:SystemRoot\System32;$env:SystemRoot"
+        & $install @options
+    }
+    finally { $env:Path = $testPath }
     $before = Get-Content -LiteralPath $config -Raw | ConvertFrom-Json
+    if ($before.codex -ne 'codex') { throw 'A fresh installation without Codex should retain the default command.' }
     if ($before.whisper_vulkan) { throw 'A fresh installation should use CPU.' }
     $shell = New-Object -ComObject WScript.Shell
     if (-not (Test-Path -LiteralPath $exportShortcut -PathType Leaf)) { throw 'The export shortcut is missing.' }
@@ -43,7 +77,7 @@ with sqlite3.connect(sys.argv[1]) as db:
     $indexHash = (Get-FileHash -LiteralPath $index).Hash
     $firstLauncher = Get-Content -LiteralPath $menuScript -Raw
 
-    & $install -ScriptsDir $menu
+    & $install -ScriptsDir $menu -ResolveDir $legacy
     $after = Get-Content -LiteralPath $config -Raw | ConvertFrom-Json
     if ($after.data_dir -ne $before.data_dir -or $after.whisper_model -ne $before.whisper_model) {
         throw 'Upgrade did not preserve the configured data and model paths.'
@@ -103,10 +137,31 @@ with ZipFile(path) as bundle:
         throw 'Uninstall left the menu, export shortcut, or application files in place.'
     }
     if ((Get-FileHash -LiteralPath $index).Hash -ne $indexHash -or
-        -not (Test-Path -LiteralPath $model) -or -not (Test-Path -LiteralPath $source)) {
-        throw 'Uninstall changed the saved index, model, or media.'
+        -not (Test-Path -LiteralPath $model) -or -not (Test-Path -LiteralPath $source) -or
+        -not (Test-Path -LiteralPath $customFFmpeg -PathType Leaf)) {
+        throw 'Uninstall removed or changed saved data or a user-provided executable.'
     }
     Write-Output 'Install, upgrade, and repeated uninstall preserve the saved index.'
+
+    Remove-Item -LiteralPath $fixturePython
+    function Read-Host { 'n' }
+    try {
+        & $install @options
+        throw 'Expected a Resolve Python check even with an explicit worker Python.'
+    }
+    catch {
+        if ($_.Exception.Message -notlike 'Python installation declined.*python.org*') { throw }
+    }
+    finally { Remove-Item Function:\Read-Host }
+    if (Test-Path -LiteralPath $menuScript) { throw 'Declining Python setup created a menu script.' }
+
+    @{ version = '3.13.0'; executable = $Python } | ConvertTo-Json -Compress |
+        Set-Content -LiteralPath $fixturePython
+    $options.Remove('Python')
+    & $install @options
+    $legacyConfig = Get-Content -LiteralPath $config -Raw | ConvertFrom-Json
+    if ($legacyConfig.python -ne $Python) { throw 'The installer did not reuse the Python detected by Resolve.' }
+    Write-Output 'Resolve 21.0 checks its own Python before installing and reuses a detected Python.'
 }
 finally {
     $resolved = (Resolve-Path -LiteralPath $root).Path

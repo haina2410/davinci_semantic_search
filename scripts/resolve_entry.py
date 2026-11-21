@@ -6,11 +6,11 @@ import traceback
 
 
 def main():
-    config = Path(CONFIG_FILE)
+    config = Path(str(globals()["CONFIG_FILE"]))
     diagnostics = None
     step = "imports"
     try:
-        sys.path.insert(0, WORKSPACE_ROOT)
+        sys.path.insert(0, str(globals()["WORKSPACE_ROOT"]))
         from davinci_search.diagnostics import DiagnosticLog
 
         diagnostics = DiagnosticLog(config.parent)

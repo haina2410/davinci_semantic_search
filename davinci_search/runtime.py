@@ -31,6 +31,17 @@ class Settings:
         )
 
 
+def python_module_command(python: str, module: str, *arguments: str) -> list[str]:
+    # ResolvePython ignores the working directory and PYTHONPATH when importing.
+    root = Path(__file__).resolve().parent.parent
+    bootstrap = (
+        "import runpy, sys\n"
+        "sys.path.insert(0, sys.argv.pop(1))\n"
+        "runpy.run_module(sys.argv.pop(1), run_name='__main__', alter_sys=True)"
+    )
+    return [python, "-u", "-X", "utf8", "-c", bootstrap, str(root), module, *arguments]
+
+
 def run_tool(
     command: list[str], *, timeout: float | None = None, cwd: Path | None = None,
     prompt: str | None = None, quiet: bool = False,

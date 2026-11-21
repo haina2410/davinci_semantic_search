@@ -1,3 +1,4 @@
+from dataclasses import replace
 import json
 import os
 from pathlib import Path
@@ -7,8 +8,10 @@ import sys
 import tempfile
 import time
 import unittest
+from unittest.mock import patch
 from uuid import uuid4
 
+from davinci_search.dependencies import describe_dependencies
 from davinci_search.hardware import Adapter, Hardware, describe_hardware, describe_recognition
 from davinci_search.index import Index, Media
 from davinci_search.runtime import Settings
@@ -206,3 +209,26 @@ class WorkerTests(unittest.TestCase):
         self.assertRegex(gpu, r"Vulkan\s+Supported\s+Not configured")
         self.assertRegex(gpu, r"CUDA\s+Supported\s+Not configured")
         self.assertEqual(describe_recognition(None, False), "No transcription run yet.")
+
+    def test_about_distinguishes_missing_tools_and_codex_login_status(self):
+        _, settings, _ = self.project("dependencies", "")
+        missing = str(self.root / "missing.exe")
+        absent = replace(settings, ffmpeg=missing, codex=missing, whisper_model=Path(missing))
+        report = describe_dependencies(absent, checked=True)
+        self.assertRegex(report, r"FFmpeg\s+Missing")
+        self.assertRegex(report, r"FFprobe\s+Found")
+        self.assertRegex(report, r"Whisper model\s+Missing")
+        self.assertRegex(report, r"Codex CLI\s+Missing")
+        self.assertIn("Install and sign in to Codex CLI to enable automatic transcript polishing.", report)
+        self.assertIn("Raw transcripts are still searchable.", report)
+
+        for code, output, status in (
+            (0, "Logged in using ChatGPT", "Found · signed in"),
+            (1, "Not logged in", "Found · sign-in required"),
+            (1, "Could not read configuration", "Found · sign-in could not be verified"),
+        ):
+            with self.subTest(status=status), patch("davinci_search.dependencies.run_tool") as probe:
+                probe.return_value = subprocess.CompletedProcess([], code, "", output)
+                report = describe_dependencies(settings, checked=True)
+                self.assertRegex(report, rf"Codex CLI\s+{status}")
+                self.assertNotIn(output, report)

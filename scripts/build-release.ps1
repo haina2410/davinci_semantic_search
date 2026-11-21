@@ -1,9 +1,9 @@
 [CmdletBinding()]
 param(
     [Parameter(Mandatory)]
-    [ValidatePattern('^v[0-9]+\.[0-9]+\.[0-9]+$')]
+    [ValidatePattern('^v[0-9]+\.[0-9]+\.[0-9]+(?:-(?:beta|preview)\.[0-9]+)?$')]
     [string] $Version,
-    [ValidatePattern('^v[0-9]+\.[0-9]+\.[0-9]+$')]
+    [ValidatePattern('^v[0-9]+\.[0-9]+\.[0-9]+(?:-(?:beta|preview)\.[0-9]+)?$')]
     [string] $PreviousVersion,
     [string] $OutputDir
 )
