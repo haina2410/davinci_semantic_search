@@ -153,7 +153,8 @@ class WorkerTests(unittest.TestCase):
         self.start(a, settings_a, media_a)
         self.start(b, settings_b, media_b)
         run = a.run_status()
-        self.assertIn("Đang nhận dạng bằng CPU", describe_recognition(run, True))
+        self.assertEqual(describe_recognition(run, True), "Transcribing with CPU.\n"
+                         "The configured Whisper Vulkan executable was not found.")
         self.assertIn("Không tìm thấy bản Whisper Vulkan", run.fallback)
         self.assertFalse(request_index(a, settings_a, lambda: [media_a]))
         self.assertTrue(request_stop(a, run.token))
@@ -197,11 +198,11 @@ class WorkerTests(unittest.TestCase):
     def test_about_distinguishes_driver_support_from_the_configured_runtime(self):
         _, settings, _ = self.project("about", "")
         cpu_only = describe_hardware(Hardware("Windows", "CPU", adapters=(), vulkan=False, cuda=False), settings)
-        self.assertIn("Không phát hiện GPU", cpu_only)
-        self.assertIn("Không phát hiện hỗ trợ", cpu_only)
+        self.assertIn("No GPU detected", cpu_only)
+        self.assertIn("Support not detected", cpu_only)
         gpu = describe_hardware(Hardware("Windows", "CPU", adapters=(Adapter("GPU", 8 * 1024**3),),
                                          vulkan=True, cuda=True), settings)
         self.assertIn("8.0 GiB", gpu)
-        self.assertRegex(gpu, r"Vulkan\s+Có hỗ trợ\s+Chưa cấu hình")
-        self.assertRegex(gpu, r"CUDA\s+Có hỗ trợ\s+Chưa cấu hình")
-        self.assertEqual(describe_recognition(None, False), "Chưa có lượt nhận dạng.")
+        self.assertRegex(gpu, r"Vulkan\s+Supported\s+Not configured")
+        self.assertRegex(gpu, r"CUDA\s+Supported\s+Not configured")
+        self.assertEqual(describe_recognition(None, False), "No transcription run yet.")

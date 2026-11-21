@@ -16,9 +16,10 @@ from uuid import UUID
 
 from .index import RunStatus
 from .runtime import Settings
+from .ui_text import english_diagnostic
 
 
-UNKNOWN = "Không xác định"
+UNKNOWN = "Unknown"
 
 
 @dataclass(frozen=True)
@@ -177,13 +178,13 @@ def supports_cuda() -> bool | None:
 
 
 def capability(supported: bool | None) -> str:
-    return {True: "Có hỗ trợ", False: "Không phát hiện hỗ trợ", None: UNKNOWN}[supported]
+    return {True: "Supported", False: "Support not detected", None: UNKNOWN}[supported]
 
 
 def whisper_install(executable: str | None) -> str:
     if not executable:
-        return "Chưa cấu hình"
-    return "Đã cấu hình, có tệp chạy" if shutil.which(executable) else "Đã cấu hình, thiếu tệp chạy"
+        return "Not configured"
+    return "Configured, executable found" if shutil.which(executable) else "Configured, executable missing"
 
 
 def describe_hardware(hardware: Hardware, settings: Settings) -> str:
@@ -191,35 +192,35 @@ def describe_hardware(hardware: Hardware, settings: Settings) -> str:
         return f"{size / 1024**3:.1f} GiB" if size is not None else UNKNOWN
 
     gpus = dict.fromkeys(
-        f"{adapter.name} · {gib(adapter.memory)} VRAM riêng" for adapter in hardware.adapters or ()
+        f"{adapter.name} · {gib(adapter.memory)} dedicated VRAM" for adapter in hardware.adapters or ()
     )
-    gpu = "\n       ".join(gpus) if gpus else ("Không phát hiện GPU" if hardware.adapters == () else UNKNOWN)
+    gpu = ("\n" + " " * 19).join(gpus) if gpus else ("No GPU detected" if hardware.adapters == () else UNKNOWN)
     return "\n".join((
-        f"Hệ điều hành  {hardware.os or UNKNOWN}",
-        f"CPU           {hardware.cpu or UNKNOWN}",
-        f"RAM           {gib(hardware.memory)}",
-        f"GPU           {gpu}",
+        f"{'Operating system':18} {hardware.os or UNKNOWN}",
+        f"{'CPU':18} {hardware.cpu or UNKNOWN}",
+        f"{'RAM':18} {gib(hardware.memory)}",
+        f"{'GPU':18} {gpu}",
         "",
-        "Backend     Máy / driver                Bản chạy Whisper",
-        f"CPU          Có hỗ trợ                  {whisper_install(settings.whisper_cpu)}",
-        f"Vulkan       {capability(hardware.vulkan):26} {whisper_install(settings.whisper_vulkan)}",
-        f"CUDA         {capability(hardware.cuda):26} Chưa cấu hình",
+        f"{'Backend':12} {'Hardware / driver':22} Whisper runtime",
+        f"{'CPU':12} {capability(True):22} {whisper_install(settings.whisper_cpu)}",
+        f"{'Vulkan':12} {capability(hardware.vulkan):22} {whisper_install(settings.whisper_vulkan)}",
+        f"{'CUDA':12} {capability(hardware.cuda):22} {whisper_install(None)}",
     ))
 
 
 def describe_recognition(run: RunStatus | None, active: bool) -> str:
     if run is None or (not run.backend and not (active and run.recognizing)):
-        return "Chưa có lượt nhận dạng."
-    backend = {"CPU": "CPU", "Vulkan": "GPU qua Vulkan", "CUDA": "GPU qua CUDA"}.get(run.backend, UNKNOWN)
+        return "No transcription run yet."
+    backend = {"CPU": "CPU", "Vulkan": "GPU via Vulkan", "CUDA": "GPU via CUDA"}.get(run.backend, UNKNOWN)
     if run.device:
         backend += f" · {run.device}"
     if active and run.recognizing and not run.backend:
-        line = "Đang khởi tạo Whisper."
+        line = "Starting Whisper."
     elif active and run.recognizing:
-        line = f"Đang nhận dạng bằng {backend}."
+        line = f"Transcribing with {backend}."
     else:
-        line = f"Backend nhận dạng gần nhất · {backend}"
-    return f"{line}\n{run.fallback}" if run.fallback else line
+        line = f"Last transcription backend · {backend}"
+    return f"{line}\n{english_diagnostic(run.fallback)}" if run.fallback else line
 
 
 def start_hardware_probe(settings: Settings) -> subprocess.Popen[str]:
