@@ -55,9 +55,8 @@ def open_window(resolve, dispatcher_factory, settings: Settings) -> None:
     about = dispatch.AddWindow(
         {"ID": "SearchAbout", "WindowTitle": "About · Davinci Semantic Search", "Geometry": [280, 220, 650, 365]},
         [ui.VGroup({"Spacing": 12}, [
-            ui.Label({"ID": "Hardware", "Text": "Đang đọc cấu hình máy…", "WordWrap": True, "Weight": 1,
-                      "StyleSheet": "font-family: Consolas;"}),
-            ui.Label({"ID": "Recognition", "Text": "Chưa có lượt nhận dạng.", "WordWrap": True, "Weight": 0}),
+            ui.TextEdit({"ID": "AboutDetails", "ReadOnly": True, "Weight": 1,
+                         "StyleSheet": "font-family: Consolas;"}),
             ui.Button({"ID": "Done", "Text": "Đóng", "Weight": 0}),
         ])],
     )
@@ -91,6 +90,8 @@ def open_window(resolve, dispatcher_factory, settings: Settings) -> None:
     hardware: Popen[str] | None = None
     hardware_deadline = 0.0
     hardware_read = False
+    hardware_text = "Đang đọc cấu hình máy…"
+    recognition_text = describe_recognition(None, False)
     closed = False
     snapshot: Snapshot | None = None
     search_project_id = ""
@@ -127,8 +128,14 @@ def open_window(resolve, dispatcher_factory, settings: Settings) -> None:
                 message.Text = str(error) or type(error).__name__
         return on_event
 
+    def update_about() -> None:
+        details = about_widgets["AboutDetails"]
+        text = f"{hardware_text}\n\n{recognition_text}"
+        if details.PlainText != text:
+            details.PlainText = text
+
     def update_progress(index: Index) -> None:
-        nonlocal controlled, recovery, cleanup_pending, next_cleanup
+        nonlocal controlled, recovery, cleanup_pending, next_cleanup, recognition_text
         run = index.run_status()
         if recovery is not None and recovery.poll() is not None:
             cleanup_pending = recovery.returncode != 0
@@ -169,10 +176,11 @@ def open_window(resolve, dispatcher_factory, settings: Settings) -> None:
         widgets["IndexStatus"].ToolTip = "\n".join(
             f"{name} — {detail}" for name, detail in status.errors[:10]
         )
-        about_widgets["Recognition"].Text = describe_recognition(run, running and not stopping)
+        recognition_text = describe_recognition(run, running and not stopping)
+        update_about()
 
     def update_hardware():
-        nonlocal hardware, hardware_read
+        nonlocal hardware, hardware_read, hardware_text
         if hardware is None:
             return
         if hardware.poll() is None:
@@ -180,9 +188,10 @@ def open_window(resolve, dispatcher_factory, settings: Settings) -> None:
                 return
             hardware.kill()
         result, _ = hardware.communicate()
-        about_widgets["Hardware"].Text = (result.strip() if hardware.returncode == 0 else "") or hardware_fallback(settings)
+        hardware_text = (result.strip() if hardware.returncode == 0 else "") or hardware_fallback(settings)
         hardware_read = True
         hardware = None
+        update_about()
 
     @handle_errors
     def refresh():
@@ -223,14 +232,15 @@ def open_window(resolve, dispatcher_factory, settings: Settings) -> None:
 
     @handle_errors
     def open_about():
-        nonlocal hardware, hardware_deadline, hardware_read
+        nonlocal hardware, hardware_deadline, hardware_read, hardware_text
         if not hardware_read and hardware is None:
             try:
                 hardware = start_hardware_probe(settings)
                 hardware_deadline = monotonic() + 8
             except OSError:
-                about_widgets["Hardware"].Text = hardware_fallback(settings)
+                hardware_text = hardware_fallback(settings)
                 hardware_read = True
+        update_about()
         about.Show()
         about.Raise()
         poll()
