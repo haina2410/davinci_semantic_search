@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 import os
 from pathlib import Path
@@ -142,7 +143,10 @@ def run_queue(
             if polish_unavailable:
                 index.record_error(media, polish_unavailable)
                 return
-            edits = polish(index.raw(media))
+            raw = index.raw(media)
+            if not raw:
+                return
+            edits = polish(raw)
             check_revision(media)
             index.save_polish(media, edits)
         except CodexUnavailable as error:
@@ -151,19 +155,22 @@ def run_queue(
         except (OSError, ValueError, RuntimeError) as error:
             record_failure(media, "codex", error)
 
-    for media in index.pending("polish"):
-        finish_polish(media)
-    for media in index.pending("asr"):
-        try:
-            check_revision(media)
-            transcript = transcribe(media)
-            check_revision(media)
-            index.save_transcript(media, transcript)
-        except (OSError, ValueError, KeyError, RuntimeError, subprocess.TimeoutExpired) as error:
-            record_failure(media, "transcription", error)
-            continue
-        if transcript.segments:
-            finish_polish(media)
+    # Both stages stay in the supervised process tree and use separate SQLite connections.
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        polishing = [executor.submit(finish_polish, media) for media in index.pending("polish")]
+        for media in index.pending("asr"):
+            try:
+                check_revision(media)
+                transcript = transcribe(media)
+                check_revision(media)
+                saved = index.save_transcript(media, transcript)
+            except (OSError, ValueError, KeyError, RuntimeError, subprocess.TimeoutExpired) as error:
+                record_failure(media, "transcription", error)
+                continue
+            if saved and transcript.segments:
+                polishing.append(executor.submit(finish_polish, media))
+        for task in polishing:
+            task.result()
     index.finish()
 
 

@@ -203,14 +203,14 @@ class Index:
             )
             return [Media(*row) for row in rows]
 
-    def save_transcript(self, media: Media, transcript: Transcript) -> None:
+    def save_transcript(self, media: Media, transcript: Transcript) -> bool:
         segments = transcript.segments
         with closing(self._connect()) as db, db:
             changed = db.execute(
                 """UPDATE media SET phase=?, error=NULL, audio_channels=?, vad_enabled=?
-                   WHERE key=? AND revision=? AND phase='asr' AND present=1""",
+                   WHERE key=? AND path=? AND revision=? AND phase='asr' AND present=1 AND available=1""",
                 ("polish" if segments else "silent", transcript.audio_channels, transcript.vad_enabled,
-                 media.key, media.revision),
+                 media.key, media.path, media.revision),
             )
             if changed.rowcount:
                 db.execute("DELETE FROM segments WHERE media_key=?", (media.key,))
@@ -218,19 +218,22 @@ class Index:
                     "INSERT INTO segments VALUES (?, ?, ?, ?, ?, NULL)",
                     ((media.key, i, s.start_ms, s.end_ms, s.text) for i, s in enumerate(segments)),
                 )
+        return changed.rowcount == 1
 
     def raw(self, media: Media) -> dict[int, str]:
         with closing(self._connect()) as db:
             return dict(db.execute(
-                "SELECT number, raw FROM segments WHERE media_key=? ORDER BY number", (media.key,)
+                """SELECT number, raw FROM segments JOIN media ON media.key=segments.media_key
+                   WHERE key=? AND path=? AND revision=? ORDER BY number""",
+                (media.key, media.path, media.revision),
             ).fetchall())
 
     def save_polish(self, media: Media, edits: dict[int, str]) -> None:
         with closing(self._connect()) as db, db:
             changed = db.execute(
                 """UPDATE media SET phase='done', error=NULL
-                   WHERE key=? AND revision=? AND phase='polish' AND present=1""",
-                (media.key, media.revision),
+                   WHERE key=? AND path=? AND revision=? AND phase='polish' AND present=1 AND available=1""",
+                (media.key, media.path, media.revision),
             )
             if changed.rowcount:
                 numbers = {row[0] for row in db.execute(
@@ -246,8 +249,8 @@ class Index:
     def record_error(self, media: Media, message: str) -> None:
         with closing(self._connect()) as db, db:
             db.execute(
-                "UPDATE media SET error=? WHERE key=? AND revision=?",
-                (message, media.key, media.revision),
+                "UPDATE media SET error=? WHERE key=? AND path=? AND revision=? AND present=1 AND available=1",
+                (message, media.key, media.path, media.revision),
             )
 
     def finish(self) -> None:

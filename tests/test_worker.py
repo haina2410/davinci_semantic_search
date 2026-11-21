@@ -15,6 +15,7 @@ from davinci_search.dependencies import describe_dependencies
 from davinci_search.hardware import Adapter, Hardware, describe_hardware, describe_recognition
 from davinci_search.index import Index, Media
 from davinci_search.runtime import Settings
+from davinci_search.search import search
 from davinci_search.transcribe import WhisperLog
 from davinci_search.worker import recover_scratch, request_index, request_stop, worker_active, worker_command
 
@@ -30,14 +31,17 @@ import wave
 tool, *args = sys.argv[1:]
 root = Path(__file__).parent
 if tool == "hold":
-    with open(args[0], "ab"):
+    path, stage = args
+    with open(path, "ab"):
         (root / "ready").touch()
-        time.sleep(30)
+        (root / f"ready-{stage}").touch()
+        while not (root / f"release-{stage}").exists():
+            time.sleep(0.05)
     sys.exit()
 
-def hold(path):
-    if (root / "hold").read_text() == tool:
-        subprocess.run([sys.executable, __file__, "hold", str(path)])
+def hold(path, stage=tool):
+    if stage in (root / "hold").read_text().splitlines():
+        subprocess.run([sys.executable, __file__, "hold", str(path), stage])
 
 if tool == "ffprobe":
     print(json.dumps({"streams": [{"index": 0, "channels": 1}]}))
@@ -47,11 +51,14 @@ elif tool == "ffmpeg":
     with wave.open(str(output), "wb") as audio:
         audio.setparams((1, 2, 16000, 0, "NONE", "not compressed"))
         audio.writeframes(b"\\0" * 3200)
+    output.with_suffix(".source").write_text(Path(args[args.index("-i") + 1]).stem)
 elif tool == "whisper":
     output = Path(args[args.index("-of") + 1] + ".json")
     print("main: processing 'fixture' ...", file=sys.stderr, flush=True)
-    hold(output)
-    text = "hello world"
+    source = Path(args[args.index("-f") + 1]).with_suffix(".source").read_text()
+    (root / f"recognized-{source}").touch()
+    hold(output, "whisper" if source == "source" else f"whisper-{source}")
+    text = "hello world" if source == "source" else "second transcript"
     if "--vad" in args and Path(args[args.index("--vad-model") + 1]) == root / "silero.bin":
         text = "speech from VAD"
     output.write_text(json.dumps({"transcription": [
@@ -59,8 +66,12 @@ elif tool == "whisper":
     ]}))
 elif tool == "codex":
     output = Path(args[args.index("--output-last-message") + 1])
-    hold(output)
-    output.write_text(json.dumps({"segments": [{"id": 0, "text": "Hello world."}]}))
+    segments = json.loads(sys.stdin.read().splitlines()[-1])["targets"]
+    hold(output, "codex-second" if segments[0]["text"] == "second transcript" else "codex")
+    for segment in segments:
+        text = segment["text"].replace("second transcript", "another transcript")
+        segment["text"] = text.capitalize() + "."
+    output.write_text(json.dumps({"segments": segments}))
 """
 
 
@@ -128,6 +139,16 @@ class WorkerTests(unittest.TestCase):
         details = log.read_text(encoding="utf-8", errors="replace") if log.exists() else ""
         self.fail(f"Worker timed out: {index.run_status()} · {index.status()}\n{details}")
 
+    def start_overlapping_stages(self, name):
+        index, settings, first = self.project(name, "codex\nwhisper-second\ncodex-second")
+        path = index.path.with_name("second.wav")
+        path.touch()
+        second = Media.from_path("second", "Second", str(path))
+        self.assertTrue(request_index(index, settings, lambda: [first, second]))
+        for stage in ("codex", "whisper-second"):
+            self.wait_for(index.path.with_name(f"ready-{stage}").exists, index=index)
+        return index, settings, [first, second]
+
     def wait_state(self, index, state):
         def matches():
             run = index.run_status()
@@ -170,6 +191,48 @@ class WorkerTests(unittest.TestCase):
                 self.assertEqual(bool(index.searchable()), stage == "codex")
                 self.assertFalse(list(index.path.with_name("scratch").iterdir()))
                 self.assertTrue(Path(media.path).exists())
+
+    def test_next_transcript_is_searchable_while_previous_polish_is_blocked(self):
+        index, _, _ = self.start_overlapping_stages("overlap")
+        # Keep A in Codex, let B complete Whisper, and gate B's Codex call too.
+        index.path.with_name("release-whisper-second").touch()
+        match = self.wait_for(lambda: search(index.searchable(), "second transcript"), index=index)[0]
+        self.assertEqual((match.version, match.start_ms), ("pending", 5))
+        self.assertEqual(index.status().phases, {"polish": 2})
+        self.assertEqual(index.run_status().state, "running")
+        self.assertFalse(index.path.with_name("ready-codex-second").exists())
+
+        index.path.with_name("release-codex").touch()
+        self.wait_for(index.path.with_name("ready-codex-second").exists, index=index)
+        self.assertEqual(index.status().phases, {"done": 1, "polish": 1})
+        self.assertTrue(index.status().requested)
+        index.path.with_name("release-codex-second").touch()
+        self.wait_state(index, "finished")
+        rows = index.searchable()
+        self.assertEqual([(row.number, row.start_ms, row.end_ms) for row in rows], [(0, 5, 80)] * 2)
+        self.assertEqual(search(rows, "another transcript")[0].version, "polished")
+        self.assertFalse(search(rows, "second transcript"))
+        self.assertEqual(search(rows, "second transcript", include_original=True)[0].version, "raw")
+
+    def test_stop_during_both_stages_resumes_from_each_checkpoint(self):
+        index, settings, media = self.start_overlapping_stages("stop-overlap")
+        self.assertTrue(request_stop(index, index.run_status().token))
+        self.wait_state(index, "stopped")
+        self.assertEqual(index.status().phases, {"asr": 1, "polish": 1})
+        self.assertTrue(index.status().requested)
+        self.assertFalse(list(index.path.with_name("scratch").iterdir()))
+        self.assertEqual(search(index.searchable(), "hello world")[0].version, "pending")
+        recognized_first = index.path.with_name("recognized-source")
+        recognized_second = index.path.with_name("recognized-second")
+        recognized_first.unlink()
+        recognized_second.unlink()
+        index.path.with_name("hold").write_text("")
+
+        self.assertTrue(request_index(index, settings, lambda: media))
+        self.wait_state(index, "finished")
+        self.assertFalse(recognized_first.exists())
+        self.assertTrue(recognized_second.exists())
+        self.assertEqual(index.status().phases, {"done": 2})
 
     def test_stop_is_project_scoped_and_vulkan_fallback_is_visible_during_recognition(self):
         a, settings_a, media_a = self.project("a", "whisper", missing_vulkan=True)

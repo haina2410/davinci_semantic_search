@@ -1,10 +1,11 @@
 import tempfile
 import unittest
+from dataclasses import replace
 from pathlib import Path
 
 from davinci_search.diagnostics import DiagnosticLog, read_events
 from davinci_search.index import Index, Media, Segment, Transcript
-from davinci_search.polish import PolishError
+from davinci_search.polish import Codex, PolishError
 from davinci_search.search import search
 from davinci_search.worker import claim_worker, run_queue, worker_active
 
@@ -66,6 +67,37 @@ class IndexTests(unittest.TestCase):
         events = read_events(self.db_path.parent, "", False)
         self.assertEqual([(event["event"], event["step"], event["error"]) for event in events],
                          [("media_error", "codex", "PolishError")])
+
+    def test_missing_codex_leaves_all_media_searchable_and_retries_only_polish(self):
+        second_path = self.source.with_name("second.wav")
+        second_path.touch()
+        second = Media.from_path("second", "Second", str(second_path))
+        media = [self.media, second]
+        self.index.queue(media)
+        missing_codex = Codex(str(self.source.with_name("missing-codex.exe")), self.source.parent)
+        run_queue(self.index, lambda _: Transcript([Segment(1, 100, "He found the door")], 1), missing_codex.polish)
+        self.assertEqual(self.index.status().phases, {"polish": 2})
+        self.assertEqual(len(self.index.status().errors), 2)
+        matches = search(self.index.searchable(), "found the door")
+        self.assertEqual({(match.media.key, match.version) for match in matches},
+                         {("source", "pending"), ("second", "pending")})
+
+        self.index.queue(media)
+        run_queue(self.index, lambda _: self.fail("ASR already ran"), lambda raw: raw)
+        self.assertEqual(self.index.status().phases, {"done": 2})
+        self.assertFalse(self.index.status().needs_attention)
+
+    def test_relinked_media_rejects_old_results_even_if_file_stats_match(self):
+        old = Transcript([Segment(1, 100, "Old transcript")], 1)
+        new = Transcript([Segment(5, 200, "New transcript")], 1)
+        relinked = replace(self.media, path=str(self.source.with_name("relinked.wav")))
+        self.index.queue([relinked])
+        self.assertFalse(self.index.save_transcript(self.media, old))
+        self.assertTrue(self.index.save_transcript(relinked, new))
+        self.assertFalse(self.index.raw(self.media))
+        self.index.save_polish(self.media, {0: "Old correction"})
+        self.assertEqual(self.index.status().phases, {"polish": 1})
+        self.assertEqual(self.index.raw(relinked), {0: "New transcript"})
 
     def test_only_one_worker_can_claim_project(self):
         with claim_worker(self.index.path) as first:
