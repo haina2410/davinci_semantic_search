@@ -15,7 +15,7 @@ class DiagnosticsTests(unittest.TestCase):
     def test_export_filters_by_time_and_project_without_copying_raw_logs(self):
         with TemporaryDirectory(dir=Path(".cache")) as tmp:
             root = Path(tmp)
-            (root / "version.txt").write_text("v1.2.3", encoding="utf-8")
+            (root / "version.txt").write_text("v1.2.3-preview.2", encoding="utf-8")
             (root / "resolve-script-error.log").write_text("Private startup traceback", encoding="utf-8")
             (root / "worker.log").write_text("Private transcript", encoding="utf-8")
             startup = DiagnosticLog(root)
@@ -39,7 +39,7 @@ class DiagnosticsTests(unittest.TestCase):
                 lines = bundle.read("events.jsonl")
                 events = [json.loads(line) for line in lines.splitlines()]
                 self.assertEqual(metadata["history_hours"], 72)
-                self.assertEqual(metadata["plugin_version"], "v1.2.3")
+                self.assertEqual(metadata["plugin_version"], "v1.2.3-preview.2")
                 self.assertEqual(metadata["resolve_version"], "21.2.0.4")
                 self.assertEqual(metadata["gpu_adapters"], ["Fixture GPU"])
                 self.assertEqual([event["event"] for event in events], ["resolve_connected", "media_error"])

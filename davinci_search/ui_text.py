@@ -13,6 +13,7 @@ DIAGNOSTICS = {
     "Media thay đổi hoặc mất kết nối. Hãy quét lại Media Pool.": "Media changed or became unavailable. Scan the Media Pool again.",
     "Chưa cấu hình bản Whisper Vulkan.": "Whisper Vulkan is not configured.",
     "Không tìm thấy model whisper.cpp. Kiểm tra cấu hình cài đặt.": "The whisper.cpp model is missing. Check the installation settings.",
+    "Không tìm thấy model Silero VAD. Kiểm tra cấu hình cài đặt.": "The Silero VAD model is missing. Check the installation settings.",
     "FFprobe không đọc được media.": "FFprobe could not read the media.",
     "FFmpeg không trích xuất được audio.": "FFmpeg could not extract the audio.",
     "Whisper Vulkan không tạo transcript.": "Whisper Vulkan did not produce a transcript.",

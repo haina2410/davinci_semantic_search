@@ -97,7 +97,7 @@ def request_index(index: Index, settings: Settings, scan: Callable[[], list[Medi
         if not acquired or starting(index.run_status()):
             return False
         token = uuid4().hex
-        index.queue(scan(), token)
+        index.queue(scan(), token, vad_enabled=settings.whisper_vad_model is not None)
     diagnostics = DiagnosticLog(settings.config_file.parent, index.path.parent.name, token)
     diagnostics.record("index_requested")
     root = Path(__file__).resolve().parent.parent

@@ -20,14 +20,17 @@ class Settings:
     whisper_vulkan: str | None
     whisper_model: Path
     codex: str
+    whisper_vad_model: Path | None = None
 
     @classmethod
     def load(cls, config_file: Path) -> Settings:
         values = json.loads(config_file.read_text(encoding="utf-8-sig"))
+        vad_model = values.get("whisper_vad_model")
         return cls(
             config_file.resolve(), Path(values["data_dir"]), values["python"],
             values["ffmpeg"], values["ffprobe"], values["whisper_cpu"],
             values.get("whisper_vulkan"), Path(values["whisper_model"]), values["codex"],
+            Path(vad_model) if vad_model else None,
         )
 
 

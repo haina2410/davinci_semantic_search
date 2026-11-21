@@ -39,6 +39,7 @@ public static class Fixture {
     $menu = Join-Path $root 'menu'
     $data = Join-Path $root 'saved index'
     $model = Join-Path $root 'model.bin'
+    $vad = Join-Path $installDir 'silero.bin'
     $source = Join-Path $root 'source.wav'
     $menuScript = Join-Path $menu 'Davinci Semantic Search.py'
     $config = Join-Path $installDir 'settings.json'
@@ -47,11 +48,12 @@ public static class Fixture {
     $customFFmpeg = Join-Path $customFFmpegDir 'ffmpeg.exe'
     Copy-Item -LiteralPath $Python -Destination $customFFmpeg
     Set-Content -LiteralPath $model -Value 'fixture'
+    Set-Content -LiteralPath $vad -Value 'fixture'
     Set-Content -LiteralPath $source -Value 'fixture'
     $options = @{
         InstallDir = $installDir; ScriptsDir = $menu; DataDir = $data; ResolveDir = $legacy
         Python = $Python; FFmpeg = $customFFmpeg; FFprobe = $Python
-        WhisperCpu = $Python; WhisperModel = $model
+        WhisperCpu = $Python; WhisperModel = $model; WhisperVadModel = $vad
     }
     $testPath = $env:Path
     try {
@@ -62,6 +64,7 @@ public static class Fixture {
     $before = Get-Content -LiteralPath $config -Raw | ConvertFrom-Json
     if ($before.codex -ne 'codex') { throw 'A fresh installation without Codex should retain the default command.' }
     if ($before.whisper_vulkan) { throw 'A fresh installation should use CPU.' }
+    if ($before.whisper_vad_model -ne $vad) { throw 'Silero VAD is not configured.' }
     $shell = New-Object -ComObject WScript.Shell
     if (-not (Test-Path -LiteralPath $exportShortcut -PathType Leaf)) { throw 'The export shortcut is missing.' }
     $firstExportArguments = $shell.CreateShortcut($exportShortcut).Arguments
@@ -79,7 +82,8 @@ with sqlite3.connect(sys.argv[1]) as db:
 
     & $install -ScriptsDir $menu -ResolveDir $legacy
     $after = Get-Content -LiteralPath $config -Raw | ConvertFrom-Json
-    if ($after.data_dir -ne $before.data_dir -or $after.whisper_model -ne $before.whisper_model) {
+    if ($after.data_dir -ne $before.data_dir -or $after.whisper_model -ne $before.whisper_model -or
+        $after.whisper_vad_model -ne $before.whisper_vad_model) {
         throw 'Upgrade did not preserve the configured data and model paths.'
     }
     if ((Get-Content -LiteralPath $menuScript -Raw) -eq $firstLauncher) {

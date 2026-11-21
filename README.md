@@ -10,11 +10,11 @@ Trên Windows x64, cài sẵn DaVinci Resolve Studio 21.0.x trở lên và kết
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\install.ps1
 ```
 
-Từ Resolve Studio 21.1, installer ưu tiên Python đi kèm Resolve khi cài mới. Installer tự tải các tệp còn thiếu gồm FFmpeg/FFprobe, whisper.cpp x64 chạy CPU và model đa ngôn ngữ `large-v3-turbo-q5_0` (khoảng 547 MiB). Các gói tải về được đối chiếu SHA-256 trước khi dùng. Mặc định, ứng dụng được cài vào `%LOCALAPPDATA%\DavinciSemanticSearch`. Mở lại Resolve nếu mục **Davinci Semantic Search** chưa hiện dưới **Workspace → Scripts**.
+Từ Resolve Studio 21.1, installer ưu tiên Python đi kèm Resolve khi cài mới. Installer tự tải các tệp còn thiếu gồm FFmpeg/FFprobe, whisper.cpp x64 chạy CPU, model đa ngôn ngữ `large-v3-turbo-q5_0` (khoảng 547 MiB) và Silero VAD v6.2.0 (dưới 1 MiB). Silero phát hiện các khoảng có giọng nói trước khi Whisper giải mã. Các gói tải về được đối chiếu SHA-256 trước khi dùng. Mặc định, ứng dụng được cài vào `%LOCALAPPDATA%\DavinciSemanticSearch`. Mở lại Resolve nếu mục **Davinci Semantic Search** chưa hiện dưới **Workspace → Scripts**.
 
 Bạn có thể lập chỉ mục và tìm transcript gốc ngay sau khi cài. Hiệu đính tự động cần cài và đăng nhập Codex CLI riêng. **About** hiển thị trạng thái Codex CLI và phần hiệu đính. [Codex CLI](https://developers.openai.com/codex/cli)
 
-Dùng `-InstallDir` để chọn thư mục cài riêng và `-DataDir` để chọn nơi lưu chỉ mục. Nếu Resolve ở vị trí tùy chỉnh, dùng `-ResolveDir` trỏ tới thư mục chứa `Resolve.exe`. Có thể chỉ định các bản chạy có sẵn qua `-Python`, `-FFmpeg`, `-FFprobe`, `-Codex`, `-WhisperCpu` hoặc `-WhisperModel`. Với bản Resolve portable, dùng cùng giá trị `-ScriptsDir` trỏ tới thư mục `Fusion\Scripts\Utility` của bản đó khi cài, nâng cấp và gỡ.
+Dùng `-InstallDir` để chọn thư mục cài riêng và `-DataDir` để chọn nơi lưu chỉ mục. Nếu Resolve ở vị trí tùy chỉnh, dùng `-ResolveDir` trỏ tới thư mục chứa `Resolve.exe`. Có thể chỉ định bản chạy hoặc model có sẵn qua `-Python`, `-FFmpeg`, `-FFprobe`, `-Codex`, `-WhisperCpu`, `-WhisperModel` hoặc `-WhisperVadModel`. Với bản Resolve portable, dùng cùng giá trị `-ScriptsDir` trỏ tới thư mục `Fusion\Scripts\Utility` của bản đó khi cài, nâng cấp và gỡ.
 
 ### Resolve Studio 21.0.x
 
@@ -37,6 +37,8 @@ Gói Vulkan đã được thử trên RTX 5060 với Windows và driver NVIDIA 6
 ### Nâng cấp và gỡ cài đặt
 
 Đóng cửa sổ plugin, giải nén ZIP phiên bản mới rồi chạy lại `install.ps1`. Installer đọc cấu hình từ mục menu hiện có, kể cả bản cài cũ trỏ vào `.runtime`, và tiếp tục dùng thư mục dữ liệu, model cùng tùy chọn backend đã lưu.
+
+Sau khi nâng cấp từ bản chưa dùng Silero, chọn **Index project** để nhận dạng lại các transcript cũ có media nguồn đang kết nối. Transcript cũ vẫn tìm được cho tới khi clip đó được nhận dạng thành công.
 
 Để gỡ, đóng cửa sổ plugin rồi chạy:
 

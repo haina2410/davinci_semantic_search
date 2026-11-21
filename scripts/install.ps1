@@ -7,6 +7,7 @@ param(
     [string] $WhisperCpu,
     [string] $WhisperVulkan,
     [string] $WhisperModel,
+    [string] $WhisperVadModel,
     [switch] $EnableVulkan,
     [switch] $DisableVulkan,
     [string] $DataDir,
@@ -312,6 +313,22 @@ if (-not $WhisperModel) {
     }
 }
 $WhisperModel = (Resolve-Path -LiteralPath $WhisperModel).Path
+if (-not $WhisperVadModel) {
+    if ($previous.whisper_vad_model -and (Test-Path -LiteralPath $previous.whisper_vad_model -PathType Leaf)) {
+        $WhisperVadModel = $previous.whisper_vad_model
+    }
+    else {
+        $vadModelName = 'ggml-silero-v6.2.0.bin'
+        $WhisperVadModel = Join-Path $InstallDir $vadModelName
+        $vadRevision = '9ffd54a1e1ee413ddf265af9913beaf518d1639b'
+        $url = "https://huggingface.co/ggml-org/whisper-vad/resolve/$vadRevision/$vadModelName"
+        Save-VerifiedDownload $url $WhisperVadModel '2aa269b785eeb53a82983a20501ddf7c1d9c48e33ab63a41391ac6c9f7fb6987'
+    }
+}
+if (-not (Test-Path -LiteralPath $WhisperVadModel -PathType Leaf)) {
+    throw "Silero VAD model not found: $WhisperVadModel"
+}
+$WhisperVadModel = (Resolve-Path -LiteralPath $WhisperVadModel).Path
 if (-not $DataDir) { $DataDir = $previous.data_dir }
 if (-not $DataDir) { $DataDir = Join-Path $InstallDir 'data' }
 $DataDir = (New-Item -ItemType Directory -Path $DataDir -Force).FullName
@@ -333,6 +350,7 @@ $configuration = [ordered]@{
     whisper_vulkan = $WhisperVulkan
     managed_vulkan = $managedVulkan
     whisper_model = $WhisperModel
+    whisper_vad_model = $WhisperVadModel
 }
 $installation = [ordered]@{
     product = 'davinci-semantic-search'

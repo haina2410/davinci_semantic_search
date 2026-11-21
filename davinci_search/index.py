@@ -41,6 +41,7 @@ class Segment:
 class Transcript:
     segments: list[Segment]
     audio_channels: int
+    vad_enabled: bool = False
 
 
 @dataclass(frozen=True)
@@ -87,7 +88,7 @@ CREATE TABLE IF NOT EXISTS media (
     key TEXT PRIMARY KEY, name TEXT NOT NULL, path TEXT NOT NULL,
     revision TEXT, present INTEGER NOT NULL, available INTEGER NOT NULL,
     phase TEXT NOT NULL CHECK (phase IN ('asr', 'polish', 'done', 'silent')),
-    error TEXT, audio_channels INTEGER
+    error TEXT, audio_channels INTEGER, vad_enabled INTEGER NOT NULL DEFAULT 0
 );
 CREATE TABLE IF NOT EXISTS segments (
     media_key TEXT NOT NULL REFERENCES media(key) ON DELETE CASCADE,
@@ -118,8 +119,11 @@ class Index:
             db.executescript(SCHEMA)
             with db:
                 db.execute("BEGIN IMMEDIATE")
-                if "audio_channels" not in {row[1] for row in db.execute("PRAGMA table_info(media)")}:
+                columns = {row[1] for row in db.execute("PRAGMA table_info(media)")}
+                if "audio_channels" not in columns:
                     db.execute("ALTER TABLE media ADD COLUMN audio_channels INTEGER")
+                if "vad_enabled" not in columns:
+                    db.execute("ALTER TABLE media ADD COLUMN vad_enabled INTEGER NOT NULL DEFAULT 0")
 
     def _connect(self) -> sqlite3.Connection:
         db = sqlite3.connect(self.path, timeout=10)
@@ -127,13 +131,13 @@ class Index:
         db.execute("PRAGMA foreign_keys=ON")
         return db
 
-    def queue(self, media: Iterable[Media], token: str | None = None) -> None:
+    def queue(self, media: Iterable[Media], token: str | None = None, *, vad_enabled: bool = False) -> None:
         """Replace the project inventory and request a run in one transaction."""
         with closing(self._connect()) as db, db:
             db.execute("UPDATE media SET present=0")
             for item in media:
                 old = db.execute(
-                    "SELECT path, revision, phase, audio_channels FROM media WHERE key=?", (item.key,)
+                    "SELECT path, revision, phase, audio_channels, vad_enabled FROM media WHERE key=?", (item.key,)
                 ).fetchone()
                 invalidated = old is None or old["path"] != item.path or (
                     item.revision is not None and (
@@ -144,13 +148,17 @@ class Index:
                 if invalidated:
                     db.execute("DELETE FROM media WHERE key=?", (item.key,))
                     db.execute(
-                        "INSERT INTO media VALUES (?, ?, ?, ?, 1, ?, 'asr', NULL, NULL)",
+                        "INSERT INTO media (key, name, path, revision, present, available, phase)"
+                        " VALUES (?, ?, ?, ?, 1, ?, 'asr')",
                         (item.key, item.name, item.path, item.revision, item.revision is not None),
                     )
                 else:
+                    phase = old["phase"]
+                    if item.revision is not None and old["vad_enabled"] != vad_enabled:
+                        phase = "asr"
                     db.execute(
-                        "UPDATE media SET present=1, available=?, name=?, error=NULL WHERE key=?",
-                        (item.revision is not None, item.name, item.key),
+                        "UPDATE media SET present=1, available=?, name=?, phase=?, error=NULL WHERE key=?",
+                        (item.revision is not None, item.name, phase, item.key),
                     )
             db.execute("UPDATE request SET pending=1 WHERE id=1")
             if token:
@@ -199,11 +207,13 @@ class Index:
         segments = transcript.segments
         with closing(self._connect()) as db, db:
             changed = db.execute(
-                """UPDATE media SET phase=?, error=NULL, audio_channels=?
+                """UPDATE media SET phase=?, error=NULL, audio_channels=?, vad_enabled=?
                    WHERE key=? AND revision=? AND phase='asr' AND present=1""",
-                ("polish" if segments else "silent", transcript.audio_channels, media.key, media.revision),
+                ("polish" if segments else "silent", transcript.audio_channels, transcript.vad_enabled,
+                 media.key, media.revision),
             )
             if changed.rowcount:
+                db.execute("DELETE FROM segments WHERE media_key=?", (media.key,))
                 db.executemany(
                     "INSERT INTO segments VALUES (?, ?, ?, ?, ?, NULL)",
                     ((media.key, i, s.start_ms, s.end_ms, s.text) for i, s in enumerate(segments)),

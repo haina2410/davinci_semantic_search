@@ -15,6 +15,7 @@ from davinci_search.dependencies import describe_dependencies
 from davinci_search.hardware import Adapter, Hardware, describe_hardware, describe_recognition
 from davinci_search.index import Index, Media
 from davinci_search.runtime import Settings
+from davinci_search.transcribe import WhisperLog
 from davinci_search.worker import recover_scratch, request_index, request_stop, worker_active, worker_command
 
 
@@ -50,8 +51,11 @@ elif tool == "whisper":
     output = Path(args[args.index("-of") + 1] + ".json")
     print("main: processing 'fixture' ...", file=sys.stderr, flush=True)
     hold(output)
+    text = "hello world"
+    if "--vad" in args and Path(args[args.index("--vad-model") + 1]) == root / "silero.bin":
+        text = "speech from VAD"
     output.write_text(json.dumps({"transcription": [
-        {"offsets": {"from": 5, "to": 80}, "text": "hello world"}
+        {"offsets": {"from": 5, "to": 80}, "text": text}
     ]}))
 elif tool == "codex":
     output = Path(args[args.index("--output-last-message") + 1])
@@ -81,7 +85,7 @@ class WorkerTests(unittest.TestCase):
                     raise
                 time.sleep(0.05)
 
-    def project(self, name, hold, *, missing_vulkan=False):
+    def project(self, name, hold, *, missing_vulkan=False, vad=False):
         folder = self.root / name
         index = Index(folder / "index.sqlite3")
         (folder / "hold").write_text(hold)
@@ -101,10 +105,14 @@ class WorkerTests(unittest.TestCase):
         source = folder / "source.wav"
         source.touch()
         config = folder / "settings.json"
+        vad_model = folder / "silero.bin"
+        if vad:
+            vad_model.touch()
         config.write_text(json.dumps({
             "data_dir": str(folder), "python": self.python, "whisper_model": str(source),
             "whisper_cpu": tools["whisper"], "ffprobe": tools["ffprobe"], "ffmpeg": tools["ffmpeg"],
             "codex": tools["codex"], "whisper_vulkan": str(folder / "missing.exe") if missing_vulkan else None,
+            "whisper_vad_model": str(vad_model) if vad else None,
         }))
         self.addCleanup(self.stop_if_running, index)
         return index, Settings.load(config), Media.from_path("source", "Fixture", str(source))
@@ -134,6 +142,19 @@ class WorkerTests(unittest.TestCase):
         run = index.run_status()
         if run and request_stop(index, run.token):
             self.wait_state(index, "stopped")
+
+    def test_index_uses_vad_when_whisper_falls_back_to_cpu(self):
+        index, settings, media = self.project("silero", "", missing_vulkan=True, vad=True)
+        self.assertTrue(request_index(index, settings, lambda: [media]))
+        self.wait_state(index, "finished")
+        self.assertEqual(index.raw(media), {0: "speech from VAD"})
+
+    def test_silero_cpu_startup_does_not_override_whisper_vulkan(self):
+        log = WhisperLog(False, "")
+        log.observe("whisper_backend_init_gpu: using Vulkan0 backend")
+        log.observe("main: processing 'fixture' ...")
+        log.observe("whisper_backend_init_gpu: no GPU found")
+        self.assertEqual(log.backend(), ("Vulkan", "Vulkan0", ""))
 
     def test_stop_each_stage_preserves_the_latest_checkpoint_and_releases_scratch(self):
         for stage in ("ffmpeg", "whisper", "codex"):

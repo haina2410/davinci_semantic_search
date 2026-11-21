@@ -131,7 +131,7 @@ def export_bundle(install_dir: Path, project: str = "", *, latest: bool = False,
         version = (install_dir / "version.txt").read_text(encoding="utf-8").strip()
     except (OSError, ValueError):
         version = ""
-    if not re.fullmatch(r"v\d+\.\d+\.\d+|development", version):
+    if not re.fullmatch(r"v\d+\.\d+\.\d+(?:-(?:beta|preview)\.\d+)?|development", version):
         version = "unknown"
     try:
         events = read_events(install_dir, project, latest)

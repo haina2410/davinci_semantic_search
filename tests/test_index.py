@@ -73,6 +73,19 @@ class IndexTests(unittest.TestCase):
             self.assertTrue(worker_active(self.index))
         self.assertFalse(worker_active(self.index))
 
+    def test_enabling_vad_requeues_cached_transcript_and_replaces_it_on_success(self):
+        run_queue(self.index, lambda _: Transcript([Segment(1, 100, "Old transcript")], 1), lambda raw: raw)
+
+        reopened = Index(self.db_path)
+        reopened.queue([self.media], vad_enabled=True)
+        self.assertEqual(reopened.status().phases, {"asr": 1})
+        self.assertEqual(reopened.raw(self.media), {0: "Old transcript"})
+
+        run_queue(reopened, lambda _: Transcript([], 1, vad_enabled=True), lambda _: self.fail("No speech"))
+        self.assertFalse(reopened.searchable())
+        reopened.queue([self.media], vad_enabled=True)
+        self.assertEqual(reopened.status().phases, {"silent": 1})
+
 
 if __name__ == "__main__":
     unittest.main()

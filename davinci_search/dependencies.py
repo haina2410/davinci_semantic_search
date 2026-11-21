@@ -46,12 +46,16 @@ def describe_dependencies(settings: Settings, *, checked: bool) -> str:
         powershell = "Found" if builtin.is_file() or shutil.which("powershell.exe") or shutil.which("pwsh.exe") else "Missing"
 
     codex = codex_status(settings.codex, check_login=checked)
+    vad = "Not configured"
+    if settings.whisper_vad_model is not None:
+        vad = "Found" if settings.whisper_vad_model.is_file() else "Missing"
     rows = (
         ("Python", python),
         ("PowerShell", powershell),
         ("FFmpeg", "Found" if shutil.which(settings.ffmpeg) else "Missing"),
         ("FFprobe", "Found" if shutil.which(settings.ffprobe) else "Missing"),
         ("Whisper model", "Found" if settings.whisper_model.is_file() else "Missing"),
+        ("Silero VAD", vad),
         ("Codex CLI", codex),
     )
     report = "\n".join(("Dependencies", *(f"{name:18} {status}" for name, status in rows)))

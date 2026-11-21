@@ -57,7 +57,7 @@ if ($record) {
     $settings = if (Test-Path -LiteralPath $config -PathType Leaf) {
         Get-Content -LiteralPath $config -Raw -Encoding UTF8 | ConvertFrom-Json
     }
-    $protected = @($settings.data_dir, $settings.whisper_model, $menuScript) |
+    $protected = @($settings.data_dir, $settings.whisper_model, $settings.whisper_vad_model, $menuScript) |
         Where-Object { $_ } | ForEach-Object { [IO.Path]::GetFullPath($_).TrimEnd('\', '/') }
     foreach ($target in $targets) {
         $path = (Resolve-Path -LiteralPath $target.FullName).Path

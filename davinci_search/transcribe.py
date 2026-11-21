@@ -19,6 +19,7 @@ from .runtime import Settings, run_tool
 AUDIO_RATE = 16000
 CHUNK_SECONDS = 300
 BackendReport = Callable[[str, str, str], None]
+PROCESSING_AUDIO = "main: processing "
 GPU_BACKEND = re.compile(r"whisper_backend_init_gpu: using ((Vulkan|CUDA)\d+) backend", re.I)
 VULKAN_DEVICE = re.compile(r"ggml_vulkan:\s*(\d+) = (.+?) \(.+?\) \|")
 
@@ -39,6 +40,10 @@ class Whisper:
         if not settings.whisper_model.is_file():
             raise ToolFailure("Không tìm thấy model whisper.cpp. Kiểm tra cấu hình cài đặt.",
                               "whisper", "model_missing")
+        vad_model = settings.whisper_vad_model
+        if vad_model is not None and not vad_model.is_file():
+            raise ToolFailure("Không tìm thấy model Silero VAD. Kiểm tra cấu hình cài đặt.",
+                              "whisper", "vad_model_missing")
         probe = run_tool([
             settings.ffprobe, "-v", "error", "-select_streams", "a", "-show_entries",
             "stream=index,channels:stream_disposition=default", "-of", "json", "-i", media.path,
@@ -47,7 +52,7 @@ class Whisper:
             raise ToolFailure("FFprobe không đọc được media.", "ffprobe", "nonzero_exit", probe.returncode)
         streams = json.loads(probe.stdout).get("streams", [])
         if not streams:
-            return Transcript([], 0)
+            return Transcript([], 0, vad_model is not None)
         stream = next((s for s in streams if s.get("disposition", {}).get("default")), streams[0])
 
         with TemporaryDirectory(prefix="asr-", dir=self.scratch_dir) as scratch:
@@ -71,7 +76,7 @@ class Whisper:
                 sample_offset += samples
                 audio.unlink()
             channels = int(stream.get("channels", 0)) if len(streams) == 1 else 0
-            return Transcript(sorted(segments, key=lambda s: (s.start_ms, s.end_ms)), channels)
+            return Transcript(sorted(segments, key=lambda s: (s.start_ms, s.end_ms)), channels, vad_model is not None)
 
     def _recognize(self, audio: Path, sample_offset: int, samples: int) -> list[Segment]:
         output = audio.with_suffix("")
@@ -80,6 +85,8 @@ class Whisper:
             "-m", str(self.settings.whisper_model), "-f", str(audio), "-l", "auto",
             "-oj", "-of", str(output), "-t", str(min(8, os.cpu_count() or 4)),
         ]
+        if self.settings.whisper_vad_model is not None:
+            arguments.extend(["--vad", "--vad-model", str(self.settings.whisper_vad_model)])
         try:
             if self.vulkan:
                 probe = WhisperLog(False, "")
@@ -133,7 +140,7 @@ class Whisper:
             assert process.stderr is not None
             for line in process.stderr:
                 probe.observe(line)
-                if line.startswith("main: processing "):
+                if line.startswith(PROCESSING_AUDIO):
                     self.report(*probe.backend())
             code = process.wait()
         if code == 0:
@@ -150,8 +157,14 @@ class WhisperLog:
         self.failure = ""
         self.selected: re.Match[str] | None = None
         self.devices: dict[str, str] = {}
+        self.processing = False
 
     def observe(self, line: str) -> None:
+        if line.startswith(PROCESSING_AUDIO):
+            self.processing = True
+        if self.processing:
+            # Silero starts on CPU after this point and emits its own backend logs.
+            return
         device = VULKAN_DEVICE.match(line)
         if device:
             self.devices[f"Vulkan{device[1]}".casefold()] = device[2]
