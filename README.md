@@ -4,26 +4,37 @@ Tìm lời thoại Việt–Anh trong Media Pool và timeline DaVinci Resolve. W
 
 ## Cài trên Windows
 
-Cần DaVinci Resolve Studio có Fusion UIManager, Python 3.10+ 64-bit, FFmpeg và FFprobe, và [Codex CLI](https://developers.openai.com/codex/cli) đã đăng nhập. Từ PowerShell trong thư mục dự án, chạy:
+Cần DaVinci Resolve Studio có Fusion UIManager, Python 3.10+ 64-bit, FFmpeg và FFprobe, và Codex CLI đã đăng nhập. Tải ZIP Windows x64 từ GitHub Releases, đối chiếu SHA-256 của phiên bản và giải nén. Trong PowerShell ở thư mục vừa giải nén, chạy lệnh dưới đây. [GitHub Releases](https://github.com/haina2410/davinci_semantic_search/releases) · [Codex CLI](https://developers.openai.com/codex/cli)
 
 ```powershell
 .\scripts\install.ps1
 ```
 
-Installer tải và kiểm tra SHA-256 cho whisper.cpp x64 chạy CPU và model đa ngôn ngữ `large-v3-turbo-q5_0` (khoảng 547 MiB). Nó lưu runtime, cấu hình và dữ liệu mặc định trong `.runtime\` trên cùng ổ đĩa với project. Mở lại Resolve nếu mục **Davinci Semantic Search** chưa hiện dưới **Workspace → Scripts**. Có thể chỉ định đường dẫn bằng `-Python`, `-FFmpeg`, `-FFprobe`, `-Codex`, `-WhisperCpu`, `-WhisperModel`, `-DataDir` hoặc `-ScriptsDir`. Với bản Resolve portable, trỏ `-ScriptsDir` vào thư mục `Fusion\Scripts\Utility` mà bản đó dùng.
+Installer tải và kiểm tra SHA-256 của whisper.cpp x64 chạy CPU và model đa ngôn ngữ `large-v3-turbo-q5_0` (khoảng 547 MiB). Mặc định, ứng dụng được cài vào `%LOCALAPPDATA%\DavinciSemanticSearch`. Mở lại Resolve nếu mục **Davinci Semantic Search** chưa hiện dưới **Workspace → Scripts**.
+
+Dùng `-InstallDir` để chọn thư mục cài riêng và `-DataDir` để chọn nơi lưu chỉ mục. Có thể chỉ định các bản chạy có sẵn qua `-Python`, `-FFmpeg`, `-FFprobe`, `-Codex`, `-WhisperCpu` hoặc `-WhisperModel`. Với bản Resolve portable, dùng cùng giá trị `-ScriptsDir` trỏ tới thư mục `Fusion\Scripts\Utility` của bản đó khi cài, nâng cấp và gỡ.
 
 ### Dùng GPU qua Vulkan
 
-CPU hoạt động với cài đặt mặc định. Trên máy AMD hoặc NVIDIA có driver hỗ trợ Vulkan, cần một bản `whisper-cli.exe` được build với `GGML_VULKAN=ON`. Ví dụ, dùng Git, Visual Studio với C++, CMake và Vulkan SDK để build từ nguồn:
+CPU là mặc định khi cài mới. Để dùng GPU qua Vulkan, cài với tùy chọn dưới đây. Installer tải gói Whisper Vulkan v1.9.2 do Subtitle Edit build và kiểm tra SHA-256 trước khi giải nén. [Gói Whisper Vulkan Windows x64](https://github.com/SubtitleEdit/support-files/releases/tag/whispercpp-192)
 
 ```powershell
-git clone --depth 1 --branch v1.9.2 https://github.com/ggml-org/whisper.cpp .runtime/whisper-src
-cmake -S .runtime/whisper-src -B .runtime/whisper-vulkan -DGGML_VULKAN=ON -DWHISPER_BUILD_TESTS=OFF
-cmake --build .runtime/whisper-vulkan --config Release --target whisper-cli
-.\scripts\install.ps1 -WhisperVulkan .runtime/whisper-vulkan/bin/Release/whisper-cli.exe
+.\scripts\install.ps1 -EnableVulkan
 ```
 
-Nếu layout build khác, truyền đường dẫn đến executable được tạo và giữ các DLL đi kèm ở vị trí build. Worker chuyển về CPU với cùng model nếu bản Vulkan gặp lỗi. [Hướng dẫn Vulkan của whisper.cpp](https://github.com/ggml-org/whisper.cpp#vulkan-gpu-support) · [Bản phát hành CPU](https://github.com/ggml-org/whisper.cpp/releases/tag/v1.9.2)
+Gói Vulkan đã được thử trên RTX 5060 với Windows và driver NVIDIA 610.88. Laptop AMD vẫn cần kiểm chứng. Bạn cũng có thể trỏ tới bản build của mình với `-WhisperVulkan` và giữ nguyên các DLL đi kèm. Worker tự chuyển về CPU nếu Vulkan lỗi. Chạy lại installer với `-DisableVulkan` để chọn CPU.
+
+### Nâng cấp và gỡ cài đặt
+
+Đóng cửa sổ plugin, giải nén ZIP phiên bản mới rồi chạy lại `install.ps1`. Installer đọc cấu hình từ mục menu hiện có, kể cả bản cài cũ trỏ vào `.runtime`, và tiếp tục dùng thư mục dữ liệu, model cùng tùy chọn backend đã lưu.
+
+Để gỡ, đóng cửa sổ plugin rồi chạy:
+
+```powershell
+.\scripts\uninstall.ps1
+```
+
+Script gỡ mục menu và tệp ứng dụng đã cài. Media nguồn, chỉ mục, transcript, log, cấu hình và model được giữ lại. Chạy cài lại với cùng thư mục cài đặt để dùng tiếp dữ liệu.
 
 ## Dùng trong Resolve
 
@@ -37,7 +48,7 @@ SQLite và `worker.log` nằm theo project dưới thư mục dữ liệu. WAV t
 
 Transcript gốc có thể tìm ngay với nhãn **Chưa hiệu đính**. Bật **Tìm thêm trong bản gốc** để tra cả transcript gốc sau khi hiệu đính. Codex nhận văn bản cùng mã đoạn để sửa lỗi và lặp do nhận dạng. Khi Codex tạm thời không hoạt động, mở lại lượt lập chỉ mục sẽ thử tiếp từ bước đó.
 
-Nếu cửa sổ script không mở, xem `.runtime/resolve-script-error.log` và Resolve Console.
+Nếu cửa sổ script không mở, xem `resolve-script-error.log` trong thư mục chứa `settings.json` của bản cài và Resolve Console.
 
 ## Kiểm tra
 
