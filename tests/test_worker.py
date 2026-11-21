@@ -212,7 +212,6 @@ class WorkerTests(unittest.TestCase):
         self.assertEqual([(row.number, row.start_ms, row.end_ms) for row in rows], [(0, 5, 80)] * 2)
         self.assertEqual(search(rows, "another transcript")[0].version, "polished")
         self.assertFalse(search(rows, "second transcript"))
-        self.assertEqual(search(rows, "second transcript", include_original=True)[0].version, "raw")
 
     def test_stop_during_both_stages_resumes_from_each_checkpoint(self):
         index, settings, media = self.start_overlapping_stages("stop-overlap")

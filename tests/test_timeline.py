@@ -6,7 +6,7 @@ from xml.etree import ElementTree
 from davinci_search.index import Media
 from davinci_search.search import Hit
 from davinci_search.timeline import (
-    MARKER_PREFIX, Placement, Snapshot, add_search_marker, clear_search_markers, project_hits, timecode,
+    MARKER_PREFIX, Placement, Snapshot, clear_search_markers, mark_search_result, project_hits, timecode,
 )
 from davinci_search.timeline_audit import parse_audit
 
@@ -14,6 +14,7 @@ from davinci_search.timeline_audit import parse_audit
 class ResolveMarkerApi:
     def __init__(self):
         self.markers = {50: {"customData": "editor", "name": "Nhịp cắt"}}
+        self.playhead = None
 
     def GetUniqueId(self):
         return "timeline"
@@ -32,11 +33,15 @@ class ResolveMarkerApi:
         del self.markers[frame]
         return True
 
+    def SetCurrentTimecode(self, timecode):
+        self.playhead = timecode
+        return True
+
 
 class TimelineTests(unittest.TestCase):
     def setUp(self):
         self.media = Media("source", "A", r"D:\media\A.mov", "revision", 1)
-        self.hit = Hit(self.media, 34000, 35000, "Đây là câu thoại", "polished", (0, 0, 0))
+        self.hit = Hit(self.media, 34000, 35000, "Đây là câu thoại", "polished", (0, 0))
         self.first = Placement("first", "source", "d:/media/a.mov", 1, 1, Fraction(86400), Fraction(86640),
                                Fraction(30000), Fraction(40000))
         self.second = replace(self.first, key="second", track=2, record_start=Fraction(86800),
@@ -61,20 +66,26 @@ class TimelineTests(unittest.TestCase):
                 self.assertEqual(result.inside, [])
                 self.assertEqual(result.unverified, [self.hit])
 
-    def test_new_search_cleans_only_owned_markers_and_recalculates_after_move(self):
+    def test_markers_seek_and_accumulate_until_explicitly_cleared(self):
         timeline = ResolveMarkerApi()
         result = project_hits(self.snapshot, [self.hit]).inside[0]
-        self.assertEqual(add_search_marker(timeline, self.snapshot, result, "search-1"), "added")
-        self.assertTrue(timeline.markers[96]["customData"].startswith(MARKER_PREFIX))
-        self.assertEqual(add_search_marker(timeline, self.snapshot, result, "search-1"), "exists")
-        self.assertEqual(add_search_marker(timeline, self.snapshot, replace(result, frame=86450), "search-1"),
-                         "occupied")
-        self.assertEqual(clear_search_markers(timeline), 0)
+        timeline.markers[96] = {"customData": f"{MARKER_PREFIX}old-search/96", "name": "Previous result"}
+        self.assertEqual(mark_search_result(timeline, self.snapshot, result), ("exists", True))
+        self.assertEqual(timeline.playhead, "01:00:04:00")
+        self.assertEqual(mark_search_result(timeline, self.snapshot, replace(result, frame=86450)),
+                         ("occupied", True))
+        self.assertEqual(timeline.playhead, "01:00:02:02")
+        self.assertEqual(timeline.markers[50]["customData"], "editor")
+
         moved = replace(self.first, record_start=Fraction(86424), record_end=Fraction(86664))
         new = replace(self.snapshot, placements=(moved,))
         updated = project_hits(new, [self.hit]).inside[0]
-        self.assertEqual(add_search_marker(timeline, new, updated, "search-2"), "added")
-        self.assertEqual(set(timeline.markers), {50, 120})
+        self.assertEqual(mark_search_result(timeline, new, updated), ("added", True))
+        self.assertEqual(timeline.playhead, "01:00:05:00")
+        self.assertEqual(set(timeline.markers), {50, 96, 120})
+        self.assertEqual(clear_search_markers(timeline), (2, 0))
+        self.assertEqual(set(timeline.markers), {50})
+        self.assertEqual(clear_search_markers(timeline), (0, 0))
 
     def test_retime_in_export_makes_its_source_unverified(self):
         root = ElementTree.fromstring("""<fcpxml><resources>

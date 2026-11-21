@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from fractions import Fraction
 import math
 import re
+from uuid import uuid4
 
 from .search import Hit
 from .timeline_audit import canonical_path
@@ -109,24 +110,36 @@ def project_hits(snapshot: Snapshot, hits: list[Hit]) -> TimelineResults:
     return results
 
 
-def clear_search_markers(timeline) -> int:
-    failed = 0
+def is_search_marker(marker: dict) -> bool:
+    tag = marker.get("customData")
+    return isinstance(tag, str) and tag.startswith(MARKER_PREFIX)
+
+
+def clear_search_markers(timeline) -> tuple[int, int]:
+    removed = failed = 0
     for marker in (timeline.GetMarkers() or {}).values():
-        tag = marker.get("customData", "")
-        if isinstance(tag, str) and tag.startswith(MARKER_PREFIX):
-            failed += not timeline.DeleteMarkerByCustomData(tag)
-    return failed
+        if not is_search_marker(marker):
+            continue
+        if timeline.DeleteMarkerByCustomData(marker["customData"]):
+            removed += 1
+        else:
+            failed += 1
+    return removed, failed
 
 
-def add_search_marker(timeline, snapshot: Snapshot, result: TimelineHit, search_id: str) -> str:
-    """Create a marker relative to the ruler origin and protect occupied frames."""
+def mark_search_result(timeline, snapshot: Snapshot, result: TimelineHit) -> tuple[str, bool]:
+    """Mark the result on the timeline ruler and seek to its absolute timecode."""
     if timeline.GetUniqueId() != snapshot.key or not snapshot.start_frame <= result.frame < snapshot.end_frame:
-        return "stale"
+        return "stale", False
     relative = result.frame - snapshot.start_frame
-    tag = f"{MARKER_PREFIX}{search_id}/{relative}"
     existing = (timeline.GetMarkers() or {}).get(relative)
     if existing:
-        return "exists" if existing.get("customData") == tag else "occupied"
-    name = f"Lời thoại · {result.hit.media.name}"[:70]
-    text = re.sub(r"\s+", " ", result.hit.excerpt).strip()
-    return "added" if timeline.AddMarker(relative, "Cyan", name, text[:1000], 1, tag) else "failed"
+        state = "exists" if is_search_marker(existing) else "occupied"
+    else:
+        name = f"Lời thoại · {result.hit.media.name}"[:70]
+        text = re.sub(r"\s+", " ", result.hit.excerpt).strip()
+        if not timeline.AddMarker(relative, "Cyan", name, text[:1000], 1, f"{MARKER_PREFIX}{uuid4().hex}"):
+            return "failed", False
+        state = "added"
+    target = timecode(result.frame, snapshot.frame_rate, snapshot.drop_frame)
+    return state, bool(timeline.SetCurrentTimecode(target))

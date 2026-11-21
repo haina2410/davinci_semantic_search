@@ -62,7 +62,6 @@ class IndexTests(unittest.TestCase):
         run_queue(self.index, lambda _: self.fail("ASR already ran"), lambda _: {0: "He opened the door"})
         self.assertFalse(search(self.index.searchable(), "found the door"))
         self.assertEqual(search(self.index.searchable(), "teh door")[0].version, "polished")
-        self.assertEqual(search(self.index.searchable(), "found the door", include_original=True)[0].version, "raw")
         self.assertFalse(self.index.status().errors)
         events = read_events(self.db_path.parent, "", False)
         self.assertEqual([(event["event"], event["step"], event["error"]) for event in events],

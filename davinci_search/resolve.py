@@ -4,11 +4,13 @@ from __future__ import annotations
 
 from fractions import Fraction
 import json
+import math
 from pathlib import Path
+import re
 from typing import Iterator, Protocol
 
 from .index import Media
-from .timeline import Placement, Snapshot, fps
+from .timeline import Placement, Snapshot, fps, timecode
 from .timeline_audit import TimingAudit, canonical_path
 
 
@@ -27,12 +29,17 @@ def media_key(item: MediaPoolItem) -> str:
     return str(item.GetUniqueId() or item.GetMediaId() or "")
 
 
-def media_items(project) -> Iterator[MediaPoolItem]:
-    stack = [project.GetMediaPool().GetRootFolder()]
+def media_folders(pool):
+    stack = [pool.GetRootFolder()]
     while stack:
         folder = stack.pop()
-        yield from folder.GetClipList() or []
+        yield folder
         stack.extend(folder.GetSubFolderList() or [])
+
+
+def media_items(project) -> Iterator[MediaPoolItem]:
+    for folder in media_folders(project.GetMediaPool()):
+        yield from folder.GetClipList() or []
 
 
 def scan_media(project) -> list[Media]:
@@ -55,11 +62,45 @@ def scan_media(project) -> list[Media]:
     return list(found.values())
 
 
-def select_source(project, key: str) -> bool:
-    return any(
-        bool(project.GetMediaPool().SetSelectedClip(item))
-        for item in media_items(project) if media_key(item) == key
-    )
+def select_source(project, key: str) -> MediaPoolItem | None:
+    pool = project.GetMediaPool()
+    for folder in media_folders(pool):
+        for item in folder.GetClipList() or []:
+            if media_key(item) != key:
+                continue
+            current = pool.GetCurrentFolder()
+            if (not current or current.GetUniqueId() != folder.GetUniqueId()) and not pool.SetCurrentFolder(folder):
+                return None
+            return item if pool.SetSelectedClip(item) else None
+    return None
+
+
+def source_timecode(properties: dict[str, object], offset_ms: int) -> str | None:
+    """Translate an offset from the start of the media to its viewer timecode."""
+    start = str(properties.get("Start TC", "")).strip()
+    match = re.fullmatch(r"([0-9]{2}):([0-9]{2}):([0-9]{2})([:;])([0-9]{2,3})", start)
+    if match is None or offset_ms < 0:
+        return None
+    try:
+        rate = fps(properties.get("FPS"))
+    except (IndexError, ValueError, ZeroDivisionError):
+        return None
+    hours, minutes, seconds, frame = (int(match[group]) for group in (1, 2, 3, 5))
+    nominal = round(rate)
+    if not (0 <= hours < 24 and minutes < 60 and seconds < 60 and 0 <= frame < nominal <= 120):
+        return None
+    total_minutes = hours * 60 + minutes
+    start_frame = (total_minutes * 60 + seconds) * nominal + frame
+    drop = match[4] == ";"
+    if drop:
+        start_frame -= (nominal // 15) * (total_minutes - total_minutes // 10)
+    if start_frame < 0 or timecode(start_frame, rate, drop) != start:
+        return None
+    offset_frames = math.floor(offset_ms * rate / 1000)
+    length = str(properties.get("Frames", ""))
+    if length.isdecimal() and offset_frames >= int(length):
+        return None
+    return timecode(start_frame + offset_frames, rate, drop)
 
 
 def optional_call(obj, method: str, *args):

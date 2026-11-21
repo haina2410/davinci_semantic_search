@@ -47,10 +47,10 @@ class Hit:
     end_ms: int
     excerpt: str
     version: str
-    rank: tuple[int, int, int]
+    rank: tuple[int, int]
 
 
-def search(rows: list[IndexedSegment], query: str, include_original: bool = False) -> list[Hit]:
+def search(rows: list[IndexedSegment], query: str) -> list[Hit]:
     requested = words(query)
     if not requested:
         return []
@@ -75,46 +75,41 @@ def search(rows: list[IndexedSegment], query: str, include_original: bool = Fals
     hits: dict[tuple[str, int], Hit] = {}
     for _, media_rows in groupby(rows, key=lambda row: row.media.key):
         segments = list(media_rows)
-        for original in (False, True) if include_original else (False,):
-            if original and all(s.polished is None for s in segments):
-                continue
-            tokens: list[tuple[str, int, int]] = []
-            excerpts: list[str] = []
-            run = 0
-            for index, segment in enumerate(segments):
-                if index and segment.start_ms - segments[index - 1].end_ms > MAX_SEGMENT_GAP_MS:
-                    run += 1
-                value = segment.raw if original or segment.polished is None else segment.polished
-                excerpts.append(value)
-                segment_words = words(value)
-                if not segment_words:
-                    run += 1
-                tokens.extend((word, index, run) for word in segment_words)
+        tokens: list[tuple[str, int, int]] = []
+        excerpts: list[str] = []
+        run = 0
+        for index, segment in enumerate(segments):
+            if index and segment.start_ms - segments[index - 1].end_ms > MAX_SEGMENT_GAP_MS:
+                run += 1
+            value = segment.raw if segment.polished is None else segment.polished
+            excerpts.append(value)
+            segment_words = words(value)
+            if not segment_words:
+                run += 1
+            tokens.extend((word, index, run) for word in segment_words)
 
-            size = len(requested)
-            for start in range(len(tokens) - size + 1):
-                first, last = tokens[start], tokens[start + size - 1]
-                if first[2] != last[2] or token_cost(0, first[0]) is None:
-                    continue
-                edits = accents = 0
-                for i in range(size):
-                    word = tokens[start + i][0]
-                    cost = token_cost(i, word)
-                    if cost is None or edits + cost > max_edits:
-                        break
-                    edits += cost
-                    accents += word != requested[i]
-                else:
-                    initial, final = segments[first[1]], segments[last[1]]
-                    rank = (edits, accents, int(original))
-                    key = (initial.media.key, initial.number)
-                    if key not in hits or rank < hits[key].rank:
-                        version = (
-                            "pending" if initial.polished is None else "raw" if original else "polished"
-                        )
-                        hits[key] = Hit(
-                            initial.media, initial.start_ms, final.end_ms,
-                            " ".join(excerpts[first[1]:last[1] + 1]), version, rank,
-                        )
+        size = len(requested)
+        for start in range(len(tokens) - size + 1):
+            first, last = tokens[start], tokens[start + size - 1]
+            if first[2] != last[2] or token_cost(0, first[0]) is None:
+                continue
+            edits = accents = 0
+            for i in range(size):
+                word = tokens[start + i][0]
+                cost = token_cost(i, word)
+                if cost is None or edits + cost > max_edits:
+                    break
+                edits += cost
+                accents += word != requested[i]
+            else:
+                initial, final = segments[first[1]], segments[last[1]]
+                rank = (edits, accents)
+                key = (initial.media.key, initial.number)
+                if key not in hits or rank < hits[key].rank:
+                    version = "pending" if initial.polished is None else "polished"
+                    hits[key] = Hit(
+                        initial.media, initial.start_ms, final.end_ms,
+                        " ".join(excerpts[first[1]:last[1] + 1]), version, rank,
+                    )
 
     return sorted(hits.values(), key=lambda hit: (hit.rank, hit.media.name.casefold(), hit.start_ms))

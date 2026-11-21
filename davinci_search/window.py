@@ -3,18 +3,20 @@
 from __future__ import annotations
 
 from functools import wraps
+import os
+from pathlib import Path
+import subprocess
 from subprocess import Popen
 from time import monotonic, sleep
-from uuid import uuid4
 
 from .diagnostics import export_bundle, open_export_folder
 from .hardware import describe_recognition, hardware_fallback, start_hardware_probe
 from .index import Index, Media, project_db
-from .resolve import read_timeline, scan_media, select_source
+from .resolve import read_timeline, scan_media, select_source, source_timecode
 from .runtime import Settings
 from .search import Hit, search
-from .timeline import Snapshot, TimelineHit, add_search_marker, clear_search_markers, project_hits, timecode
-from .timeline_audit import audit_timeline
+from .timeline import Snapshot, TimelineHit, clear_search_markers, mark_search_result, project_hits, timecode
+from .timeline_audit import audit_timeline, canonical_path
 from .ui_text import english_diagnostic
 from .worker import STOPPABLE, request_index, request_stop, start_recovery, starting, worker_active
 
@@ -42,14 +44,16 @@ def open_window(resolve, dispatcher_factory, settings: Settings) -> None:
             ui.HGroup({"Weight": 0}, [
                 ui.ComboBox({"ID": "Scope", "Weight": 0}),
                 ui.LineEdit({"ID": "Query", "PlaceholderText": "Search Vietnamese or English dialogue"}),
-                ui.CheckBox({"ID": "Original", "Text": "Include raw transcript", "Checked": False, "Weight": 0}),
                 ui.Button({"ID": "Search", "Text": "Search", "Weight": 0}),
             ]),
-            ui.Tree({"ID": "Results", "AlternatingRowColors": True, "SortingEnabled": False, "Weight": 3}),
+            ui.Tree({"ID": "Results", "AlternatingRowColors": True, "SortingEnabled": False,
+                     "Events": {"ItemSelectionChanged": True}, "Weight": 3}),
             ui.HGroup({"Weight": 0}, [
                 ui.Label({"ID": "Message", "WordWrap": True, "Text": "", "Weight": 1}),
-                ui.Button({"ID": "SelectSource", "Text": "Select in Media Pool", "Weight": 0}),
-                ui.Button({"ID": "Marker", "Text": "Add Temporary Marker", "Weight": 0}),
+                ui.Button({"ID": "SelectSource", "Text": "Open at Source Time", "Weight": 0}),
+                ui.Button({"ID": "CopySourceTimecode", "Text": "Copy Source Timecode", "Visible": False, "Weight": 0}),
+                ui.Button({"ID": "Marker", "Text": "Add Temporary Marker", "Visible": False, "Weight": 0}),
+                ui.Button({"ID": "ClearMarkers", "Text": "Clear Temporary Markers", "Visible": False, "Weight": 0}),
             ]),
         ])],
     )
@@ -101,9 +105,16 @@ def open_window(resolve, dispatcher_factory, settings: Settings) -> None:
     closed = False
     snapshot: Snapshot | None = None
     search_project_id = ""
-    search_id = ""
     rows: dict[str, tuple[Hit, TimelineHit | None]] = {}
+    copy_target: tuple[Hit, str] | None = None
     message = widgets["Message"]
+
+    def clear_results():
+        nonlocal copy_target
+        copy_target = None
+        rows.clear()
+        tree.Clear()
+        update_result_actions()
 
     def get_project_index():
         nonlocal current_index, recovery, cleanup_pending, next_cleanup
@@ -121,8 +132,7 @@ def open_window(resolve, dispatcher_factory, settings: Settings) -> None:
             current_index = Index(path)
             window.WindowTitle = f"Davinci Semantic Search · {project.GetName()}"
             recovery, cleanup_pending, next_cleanup = None, False, 0.0
-            tree.Clear()
-            rows.clear()
+            clear_results()
         return project, current_index
 
     def handle_errors(function):
@@ -280,7 +290,7 @@ def open_window(resolve, dispatcher_factory, settings: Settings) -> None:
                 f"A{result.placement.track} · "
                 f"{timecode(result.frame, snapshot.frame_rate, snapshot.drop_frame)}"
             )
-        version = {"pending": "Awaiting polish", "raw": "Raw", "polished": "Polished"}
+        version = {"pending": "Awaiting polish", "polished": "Polished"}
         row = tree.NewItem()
         for position, value in enumerate((
             section, hit.media.name, source_time(hit.start_ms), destination,
@@ -294,7 +304,7 @@ def open_window(resolve, dispatcher_factory, settings: Settings) -> None:
 
     @handle_errors
     def find():
-        nonlocal snapshot, search_id, search_project_id
+        nonlocal snapshot, search_project_id
         project, index = get_project_index()
         query = widgets["Query"].Text.strip()
         if not query:
@@ -305,14 +315,11 @@ def open_window(resolve, dispatcher_factory, settings: Settings) -> None:
         if only_timeline and not timeline:
             raise RuntimeError("Open a timeline to search its dialogue.")
         update_progress(index)
-        hits = search(index.searchable(), query, widgets["Original"].Checked)
+        hits = search(index.searchable(), query)
         snapshot = inspect_timeline(timeline) if only_timeline and hits else None
-        failed_cleanup = clear_search_markers(timeline) if timeline else 0
 
-        tree.Clear()
-        rows.clear()
+        clear_results()
         search_project_id = project.GetUniqueId()
-        search_id = uuid4().hex
         if snapshot:
             results = project_hits(snapshot, hits)
             for result in results.inside:
@@ -327,49 +334,112 @@ def open_window(resolve, dispatcher_factory, settings: Settings) -> None:
         result_count = len(rows)
         result_label = "result" if result_count == 1 else "results"
         message.Text = f"{result_count} {result_label}" if result_count else "No matching dialogue found."
-        if failed_cleanup:
-            markers = "marker" if failed_cleanup == 1 else "markers"
-            message.Text += f" · Could not remove {failed_cleanup} temporary {markers}."
 
-    def selected() -> tuple[Hit, TimelineHit | None]:
+    def selected_result() -> tuple[Hit, TimelineHit | None] | None:
         selection = tree.SelectedItems()
         if not selection:
-            raise RuntimeError("Select a search result.")
+            return None
         selected_rows = selection.values() if isinstance(selection, dict) else selection
         row = next(iter(selected_rows), None)
-        result = rows.get(row.Text[6]) if row is not None else None
+        return rows.get(row.Text[6]) if row is not None else None
+
+    def selected() -> tuple[Hit, TimelineHit | None]:
+        result = selected_result()
         if result is None:
             raise RuntimeError("Select a search result.")
         return result
 
+    def update_result_actions(event=None):
+        selection = selected_result()
+        timeline_scope = scope.CurrentIndex == 1
+        widgets["Marker"].Visible = bool(timeline_scope and selection and selection[1] is not None)
+        widgets["ClearMarkers"].Visible = timeline_scope
+        widgets["CopySourceTimecode"].Visible = bool(copy_target and selection and selection[0] is copy_target[0])
+
     @handle_errors
     def choose_source():
+        nonlocal copy_target
+        copy_target = None
+        update_result_actions()
         project, _ = get_project_index()
         hit, _ = selected()
-        if project.GetUniqueId() == search_project_id and select_source(project, hit.media.key):
-            message.Text = f"Selected {hit.media.name} · Source time {source_time(hit.start_ms)}."
-        else:
-            message.Text = "This media is no longer in the project. Search again."
+        if project.GetUniqueId() != search_project_id:
+            raise RuntimeError("The project has changed. Search again.")
+        if resolve.GetCurrentPage() != "edit":
+            resolve.OpenPage("edit")
+        clip = select_source(project, hit.media.key)
+        if clip is None:
+            raise RuntimeError("Resolve could not select this clip in the Media Pool. Search again.")
+
+        properties = clip.GetClipProperty()
+        path = properties.get("File Path") if isinstance(properties, dict) else None
+        if isinstance(path, str) and (
+            canonical_path(path) != canonical_path(hit.media.path)
+            or Media.from_path(hit.media.key, hit.media.name, path).revision != hit.media.revision
+        ):
+            raise RuntimeError("This media has changed or is offline. Search again after reindexing.")
+        target = source_timecode(properties, hit.start_ms) if isinstance(properties, dict) else None
+        if target is None:
+            message.Text = (f"Selected {hit.media.name} · Resolve could not determine a viewer timecode. "
+                            f"Dialogue starts {source_time(hit.start_ms)} into the clip.")
+            return
+        copy_target = (hit, target)
+        update_result_actions()
+        message.Text = (f"Selected {hit.media.name} · Playhead was not moved. "
+                        f"Copy {target} and paste it into the Source Viewer.")
+
+    @handle_errors
+    def copy_source_timecode():
+        project, _ = get_project_index()
+        hit, _ = selected()
+        if project.GetUniqueId() != search_project_id or copy_target is None or hit is not copy_target[0]:
+            raise RuntimeError("Open the selected result to get its source timecode.")
+        target = copy_target[1]
+        clipboard = Path(os.environ["SystemRoot"]) / "System32" / "clip.exe"
+        try:
+            subprocess.run([str(clipboard)], input=target.encode("ascii"), check=True, timeout=2,
+                           creationflags=subprocess.CREATE_NO_WINDOW)
+        except (OSError, subprocess.SubprocessError):
+            raise RuntimeError(f"Could not copy timecode. Enter {target} in the Source Viewer.") from None
+        message.Text = f"Copied {target}. Paste it into the Source Viewer timecode field."
 
     @handle_errors
     def mark():
         project, _ = get_project_index()
         hit, result = selected()
-        if result is None or snapshot is None:
+        if scope.CurrentIndex != 1 or result is None or snapshot is None:
             raise RuntimeError("Select a verified result from In Timeline.")
         timeline = project.GetCurrentTimeline()
         changed_source = Media.from_path(hit.media.key, hit.media.name, hit.media.path).revision != hit.media.revision
         if (project.GetUniqueId() != search_project_id or not timeline or changed_source
                 or inspect_timeline(timeline) != snapshot):
             raise RuntimeError("The result's position may have changed. Search again before adding a marker.")
-        state = add_search_marker(timeline, snapshot, result, search_id)
+        if resolve.GetCurrentPage() != "edit":
+            resolve.OpenPage("edit")
+        state, moved = mark_search_result(timeline, snapshot, result)
         message.Text = {
             "added": "Added a temporary marker to the timeline ruler.",
-            "exists": "This search already marked that frame.",
+            "exists": "This frame already has a temporary marker.",
             "occupied": "This frame already has a marker.",
             "stale": "The timeline has changed. Search again before adding a marker.",
             "failed": "Resolve could not add a marker at this frame.",
         }[state]
+        if state in ("added", "exists", "occupied"):
+            message.Text += " Moved the playhead to the marker." if moved else " Resolve could not move the playhead."
+
+    @handle_errors
+    def clear_markers():
+        project, _ = get_project_index()
+        timeline = project.GetCurrentTimeline()
+        if not timeline:
+            raise RuntimeError("Open a timeline to clear its temporary markers.")
+        removed, failed = clear_search_markers(timeline)
+        if not removed and not failed:
+            message.Text = "No temporary markers on this timeline."
+            return
+        message.Text = f"Removed {removed} temporary {'marker' if removed == 1 else 'markers'}."
+        if failed:
+            message.Text += f" Could not remove {failed}."
 
     window.On.Index.Clicked = start_index
     window.On.Stop.Clicked = stop
@@ -377,8 +447,12 @@ def open_window(resolve, dispatcher_factory, settings: Settings) -> None:
     window.On.About.Clicked = open_about
     window.On.Query.ReturnPressed = find
     window.On.Search.Clicked = find
+    window.On.Scope.CurrentIndexChanged = update_result_actions
+    window.On.Results.ItemSelectionChanged = update_result_actions
     window.On.SelectSource.Clicked = choose_source
+    window.On.CopySourceTimecode.Clicked = copy_source_timecode
     window.On.Marker.Clicked = mark
+    window.On.ClearMarkers.Clicked = clear_markers
     window.On.TranscriptSearch.Close = close
     about.On.SearchAbout.Close = close_about
     about.On.Done.Clicked = close_about
