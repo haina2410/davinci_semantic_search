@@ -3,6 +3,8 @@ param(
     [Parameter(Mandatory)]
     [ValidatePattern('^v[0-9]+\.[0-9]+\.[0-9]+$')]
     [string] $Version,
+    [ValidatePattern('^v[0-9]+\.[0-9]+\.[0-9]+$')]
+    [string] $PreviousVersion,
     [string] $OutputDir
 )
 
@@ -20,8 +22,7 @@ $hash = (Get-FileHash -LiteralPath $archive -Algorithm SHA256).Hash.ToLowerInvar
 $hashFile = "$archive.sha256"
 Set-Content -LiteralPath $hashFile -Value "$hash  $archiveName" -Encoding Ascii
 
-$previous = & git -C $repo describe --tags --abbrev=0 --match 'v[0-9]*.[0-9]*.[0-9]*' "$tag^" 2>$null
-$range = if ($LASTEXITCODE -eq 0 -and $previous) { "$previous..$tag" } else { $tag }
+$range = if ($PreviousVersion) { "refs/tags/$PreviousVersion..$tag" } else { $tag }
 $changes = & git -C $repo log --no-merges $range '--format=- %s (%h)'
 if ($LASTEXITCODE -ne 0) { throw 'Could not generate release notes.' }
 $notes = @(

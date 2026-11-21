@@ -7,7 +7,7 @@ $cache = (New-Item -ItemType Directory -Path (Join-Path $repo '.cache') -Force).
 $root = (New-Item -ItemType Directory -Path (Join-Path $cache "install-test-$([guid]::NewGuid().ToString('N'))")).FullName
 $install = Join-Path $repo 'scripts/install.ps1'
 $uninstall = Join-Path $repo 'scripts/uninstall.ps1'
-$Python = (Get-Command $Python -CommandType Application).Source
+$Python = (Get-Command $Python -CommandType Application | Select-Object -First 1).Source
 
 try {
     $installDir = Join-Path $root 'installed'

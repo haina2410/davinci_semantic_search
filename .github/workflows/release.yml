@@ -12,11 +12,11 @@ jobs:
   release:
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           fetch-depth: 0
           persist-credentials: false
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: '3.13'
       - run: python -m unittest discover -s tests -q
@@ -28,6 +28,10 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           $version = $env:GITHUB_REF_NAME
-          $package = ./scripts/build-release.ps1 -Version $version
+          $build = @{ Version = $version }
+          $previous = gh release list --limit 1 --exclude-drafts --exclude-pre-releases --json tagName --jq '.[0].tagName // empty'
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          if ($previous) { $build.PreviousVersion = $previous }
+          $package = ./scripts/build-release.ps1 @build
           gh release create $version $package.Archive $package.Checksum --verify-tag --title "Davinci Semantic Search $version" --notes-file $package.Notes
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
