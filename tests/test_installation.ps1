@@ -1,5 +1,5 @@
 [CmdletBinding()]
-param([string] $Python = 'python')
+param([string] $Python = 'python', [string] $Setup, [string] $Version)
 
 $ErrorActionPreference = 'Stop'
 $repo = Split-Path -Parent $PSScriptRoot
@@ -44,6 +44,7 @@ public static class Fixture {
     $menuScript = Join-Path $menu 'Davinci Semantic Search.py'
     $config = Join-Path $installDir 'settings.json'
     $exportShortcut = Join-Path $installDir 'Davinci Semantic Search - Export logs.lnk'
+    $uninstallShortcut = Join-Path $installDir 'Davinci Semantic Search - Uninstall.lnk'
     $customFFmpegDir = (New-Item -ItemType Directory -Path (Join-Path $installDir 'runtime/ffmpeg-8.1.2') -Force).FullName
     $customFFmpeg = Join-Path $customFFmpegDir 'ffmpeg.exe'
     Copy-Item -LiteralPath $Python -Destination $customFFmpeg
@@ -54,6 +55,26 @@ public static class Fixture {
         InstallDir = $installDir; ScriptsDir = $menu; DataDir = $data; ResolveDir = $legacy
         Python = $Python; FFmpeg = $customFFmpeg; FFprobe = $Python
         WhisperCpu = $Python; WhisperModel = $model; WhisperVadModel = $vad
+    }
+
+    $blockedMenu = Join-Path $root 'blocked menu'
+    $blockedLauncher = Join-Path $blockedMenu 'Davinci Semantic Search.py'
+    [IO.Directory]::CreateDirectory($blockedLauncher) | Out-Null
+    $freshInstall = Join-Path $root 'failed fresh install'
+    $freshData = Join-Path $root 'failed fresh data'
+    $freshOptions = $options.Clone()
+    $freshOptions.InstallDir = $freshInstall
+    $freshOptions.DataDir = $freshData
+    $freshOptions.ScriptsDir = $blockedMenu
+    $failure = $null
+    try { & $install @freshOptions }
+    catch { $failure = $_ }
+    if (-not $failure -or $failure.ScriptStackTrace -notmatch 'at Write-InstallText') {
+        throw "Expected fresh installation to fail publishing the launcher. $failure"
+    }
+    if ((Test-Path -LiteralPath $freshInstall) -or (Test-Path -LiteralPath $freshData) -or
+        -not (Test-Path -LiteralPath $blockedLauncher -PathType Container)) {
+        throw 'A failed fresh installation left new files or removed a pre-existing directory.'
     }
     $testPath = $env:Path
     try {
@@ -67,6 +88,7 @@ public static class Fixture {
     if ($before.whisper_vad_model -ne $vad) { throw 'Silero VAD is not configured.' }
     $shell = New-Object -ComObject WScript.Shell
     if (-not (Test-Path -LiteralPath $exportShortcut -PathType Leaf)) { throw 'The export shortcut is missing.' }
+    if (-not (Test-Path -LiteralPath $uninstallShortcut -PathType Leaf)) { throw 'The uninstall shortcut is missing.' }
     $firstExportArguments = $shell.CreateShortcut($exportShortcut).Arguments
 
     $index = Join-Path $data 'index.sqlite3'
@@ -79,6 +101,26 @@ with sqlite3.connect(sys.argv[1]) as db:
     if ($LASTEXITCODE -ne 0) { throw 'Could not create the saved index.' }
     $indexHash = (Get-FileHash -LiteralPath $index).Hash
     $firstLauncher = Get-Content -LiteralPath $menuScript -Raw
+
+    $publishedFiles = @($config, $exportShortcut, $uninstallShortcut, $menuScript,
+        (Join-Path $installDir 'installation.json'), (Join-Path $installDir 'version.txt'))
+    $firstHashes = @(Get-FileHash -LiteralPath $publishedFiles | ForEach-Object Hash)
+    $firstApp = @(Get-ChildItem -LiteralPath $installDir -Directory -Filter 'app-*' | ForEach-Object Name)
+    $openMenu = [IO.File]::Open($menuScript, [IO.FileMode]::Open, [IO.FileAccess]::Read, [IO.FileShare]::Read)
+    $failure = $null
+    try { & $install -ScriptsDir $menu -ResolveDir $legacy }
+    catch { $failure = $_ }
+    finally { $openMenu.Dispose() }
+    if (-not $failure -or $failure.ScriptStackTrace -notmatch 'at Write-InstallText') {
+        throw "Expected failed upgrade while replacing the launcher. $failure"
+    }
+    $currentHashes = @(Get-FileHash -LiteralPath $publishedFiles | ForEach-Object Hash)
+    $currentApp = @(Get-ChildItem -LiteralPath $installDir -Directory -Filter 'app-*' | ForEach-Object Name)
+    if ((Compare-Object $firstHashes $currentHashes -SyncWindow 0) -or (Compare-Object $firstApp $currentApp) -or
+        (Get-FileHash -LiteralPath $index).Hash -ne $indexHash) {
+        throw 'A failed upgrade changed the existing application, installed files, or saved index.'
+    }
+    Write-Output 'Failed fresh installation and upgrade roll back installer changes.'
 
     & $install -ScriptsDir $menu -ResolveDir $legacy
     $after = Get-Content -LiteralPath $config -Raw | ConvertFrom-Json
@@ -137,6 +179,7 @@ with ZipFile(path) as bundle:
     & $uninstall -ScriptsDir $menu
     & $uninstall -ScriptsDir $menu -InstallDir $installDir
     if ((Test-Path -LiteralPath $menuScript) -or (Test-Path -LiteralPath $exportShortcut) -or
+        (Test-Path -LiteralPath $uninstallShortcut) -or
         (Get-ChildItem -LiteralPath $installDir -Filter 'app-*')) {
         throw 'Uninstall left the menu, export shortcut, or application files in place.'
     }
@@ -166,6 +209,66 @@ with ZipFile(path) as bundle:
     $legacyConfig = Get-Content -LiteralPath $config -Raw | ConvertFrom-Json
     if ($legacyConfig.python -ne $Python) { throw 'The installer did not reuse the Python detected by Resolve.' }
     Write-Output 'Resolve 21.0 checks its own Python before installing and reuses a detected Python.'
+
+    if ($Setup) {
+        $isolated = @{
+            APPDATA = Join-Path $root 'roaming'
+            LOCALAPPDATA = Join-Path $root 'local'
+            TEMP = (New-Item -ItemType Directory -Path (Join-Path $root 'temp')).FullName
+            TMP = Join-Path $root 'temp'
+            ProgramFiles = Join-Path $root 'programs'
+        }
+        $previousEnvironment = @{}
+        try {
+            foreach ($variable in $isolated.Keys) {
+                $previousEnvironment[$variable] = [Environment]::GetEnvironmentVariable($variable)
+                [Environment]::SetEnvironmentVariable($variable, $isolated[$variable])
+            }
+            $defaultResolve = Join-Path $env:ProgramFiles 'Blackmagic Design\DaVinci Resolve'
+            New-Item -ItemType Directory -Path $defaultResolve -Force | Out-Null
+            Get-ChildItem -LiteralPath $legacy -File | ForEach-Object {
+                Copy-Item -LiteralPath $_.FullName -Destination $defaultResolve
+            }
+            & $install -FFmpeg $customFFmpeg -FFprobe $Python -WhisperCpu $Python -WhisperModel $model -WhisperVadModel $vad
+            $defaultInstall = Join-Path $env:LOCALAPPDATA 'DavinciSemanticSearch'
+            $versionFile = Join-Path $defaultInstall 'version.txt'
+            '' | & $Setup
+            if ($LASTEXITCODE -ne 0 -or (Get-Content -LiteralPath $versionFile -Raw).Trim() -ne $Version -or
+                (Get-ChildItem -LiteralPath $env:TEMP -Filter 'davinci-semantic-search-*')) {
+                throw 'The setup EXE did not apply the packaged version or left its temporary files.'
+            }
+            Write-Output 'The setup EXE upgrades the default installation without arguments.'
+
+            $defaultRecord = Get-Content -LiteralPath (Join-Path $defaultInstall 'installation.json') -Raw | ConvertFrom-Json
+            $shortcut = $shell.CreateShortcut($defaultRecord.uninstall_shortcut)
+            $startInfo = [Diagnostics.ProcessStartInfo]::new($shortcut.TargetPath, $shortcut.Arguments)
+            $startInfo.WorkingDirectory = $shortcut.WorkingDirectory
+            $startInfo.UseShellExecute = $false
+            $startInfo.RedirectStandardInput = $true
+            $process = [Diagnostics.Process]::Start($startInfo)
+            try {
+                $process.StandardInput.WriteLine('y')
+                $process.StandardInput.WriteLine('')
+                $process.StandardInput.Close()
+                if (-not $process.WaitForExit(15000)) {
+                    $process.Kill()
+                    throw 'The uninstall shortcut did not exit after confirmation.'
+                }
+                if ($process.ExitCode -ne 0 -or (Test-Path -LiteralPath $defaultRecord.menu_script) -or
+                    (Test-Path -LiteralPath $defaultRecord.uninstall_shortcut) -or
+                    -not (Test-Path -LiteralPath (Join-Path $defaultInstall 'data') -PathType Container)) {
+                    throw 'The uninstall shortcut did not remove the plugin and preserve its data.'
+                }
+            }
+            finally { $process.Dispose() }
+            Write-Output 'The installed shortcut uninstalls the plugin and preserves project data.'
+        }
+        finally {
+            foreach ($variable in $previousEnvironment.Keys) {
+                [Environment]::SetEnvironmentVariable($variable, $previousEnvironment[$variable])
+            }
+        }
+    }
 }
 finally {
     $resolved = (Resolve-Path -LiteralPath $root).Path

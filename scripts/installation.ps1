@@ -73,3 +73,19 @@ function Test-IsBelow([string] $Path, [string] $Directory) {
     $prefix = $Directory.TrimEnd('\', '/') + [IO.Path]::DirectorySeparatorChar
     $Path.StartsWith($prefix, [StringComparison]::OrdinalIgnoreCase)
 }
+
+function Enter-InstallationLock {
+    $sid = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value
+    $mutex = [Threading.Mutex]::new($false, "Global\DavinciSemanticSearchSetup-$sid")
+    try {
+        if (-not $mutex.WaitOne(0)) { throw 'Another Davinci Semantic Search setup is running. Close it and try again.' }
+    }
+    catch [Threading.AbandonedMutexException] {
+        # Windows grants ownership when the previous process exited while holding the lock.
+    }
+    catch {
+        $mutex.Dispose()
+        throw
+    }
+    $mutex
+}

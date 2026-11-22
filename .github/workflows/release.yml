@@ -20,8 +20,6 @@ jobs:
         with:
           python-version: '3.13'
       - run: python -m unittest discover -s tests -q
-      - run: ./tests/test_installation.ps1
-        shell: pwsh
       - name: Build and publish tag
         shell: pwsh
         env:
@@ -33,5 +31,7 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           if ($previous) { $build.PreviousVersion = $previous }
           $package = ./scripts/build-release.ps1 @build
-          gh release create $version $package.Archive $package.Checksum --verify-tag --title "Davinci Semantic Search $version" --notes-file $package.Notes
+          & "$env:WINDIR\System32\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -ExecutionPolicy Bypass -File ./tests/test_installation.ps1 -Setup $package.Installer -Version $version
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          gh release create $version $package.Installer $package.Checksum --verify-tag --title "Davinci Semantic Search $version" --notes-file $package.Notes
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }

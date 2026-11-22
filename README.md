@@ -4,49 +4,43 @@ Tìm lời thoại Việt–Anh trong Media Pool và timeline DaVinci Resolve. W
 
 ## Cài trên Windows
 
-Trên Windows x64, cài sẵn DaVinci Resolve Studio 21.0.x trở lên và kết nối Internet cho lần cài đầu. Tải ZIP từ GitHub Releases, đối chiếu SHA-256 của phiên bản và giải nén. Trong PowerShell ở thư mục vừa giải nén, chạy lệnh dưới đây. [GitHub Releases](https://github.com/haina2410/davinci_semantic_search/releases)
+1. Trên Windows x64 có DaVinci Resolve Studio 21.0.x trở lên, tải tệp `*-windows-x64-setup.exe` từ GitHub Releases rồi nhấp đúp. Lần cài đầu cần Internet. [GitHub Releases](https://github.com/haina2410/davinci_semantic_search/releases)
+2. Đợi cửa sổ cài đặt báo **Setup complete**, rồi nhấn Enter để đóng.
+3. Mở lại Resolve và chọn **Workspace → Scripts → Davinci Semantic Search**.
 
-```powershell
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\install.ps1
-```
-
-Từ Resolve Studio 21.1, installer ưu tiên Python đi kèm Resolve khi cài mới. Installer tự tải các tệp còn thiếu gồm FFmpeg/FFprobe, whisper.cpp x64 chạy CPU, model đa ngôn ngữ `large-v3-turbo-q5_0` (khoảng 547 MiB) và Silero VAD v6.2.0 (dưới 1 MiB). Silero phát hiện các khoảng có giọng nói trước khi Whisper giải mã. Các gói tải về được đối chiếu SHA-256 trước khi dùng. Mặc định, ứng dụng được cài vào `%LOCALAPPDATA%\DavinciSemanticSearch`. Mở lại Resolve nếu mục **Davinci Semantic Search** chưa hiện dưới **Workspace → Scripts**.
+Từ Resolve Studio 21.1, bộ cài ưu tiên Python đi kèm Resolve khi cài mới. Bộ cài tự tải các tệp còn thiếu gồm FFmpeg/FFprobe, whisper.cpp x64 chạy CPU, model đa ngôn ngữ `large-v3-turbo-q5_0` (khoảng 547 MiB) và Silero VAD v6.2.0 (dưới 1 MiB). Silero phát hiện các khoảng có giọng nói trước khi Whisper giải mã. Các gói tải về được đối chiếu SHA-256 trước khi dùng. Mặc định, ứng dụng được cài vào `%LOCALAPPDATA%\DavinciSemanticSearch`.
 
 Bạn có thể lập chỉ mục và tìm transcript gốc ngay sau khi cài. Hiệu đính tự động cần cài và đăng nhập Codex CLI riêng. **About** hiển thị trạng thái Codex CLI và phần hiệu đính. [Codex CLI](https://developers.openai.com/codex/cli)
 
-Dùng `-InstallDir` để chọn thư mục cài riêng và `-DataDir` để chọn nơi lưu chỉ mục. Nếu Resolve ở vị trí tùy chỉnh, dùng `-ResolveDir` trỏ tới thư mục chứa `Resolve.exe`. Có thể chỉ định bản chạy hoặc model có sẵn qua `-Python`, `-FFmpeg`, `-FFprobe`, `-Codex`, `-WhisperCpu`, `-WhisperModel` hoặc `-WhisperVadModel`. Với bản Resolve portable, dùng cùng giá trị `-ScriptsDir` trỏ tới thư mục `Fusion\Scripts\Utility` của bản đó khi cài, nâng cấp và gỡ.
-
 ### Resolve Studio 21.0.x
 
-Installer chạy `fuscript.exe` để kiểm tra Resolve có nạp được Python 3.10 trở lên, 64-bit, rồi in phiên bản nếu kiểm tra thành công. Nếu Resolve chưa nạp được Python phù hợp, installer hỏi trước khi tải và cài Python 3.14.10 x64 cho tất cả người dùng Windows. Windows có thể yêu cầu quyền quản trị. `-Python` chỉ chọn Python cho tiến trình nền và shortcut xuất log.
+Bộ cài kiểm tra Resolve có nạp được Python 3.10 trở lên, 64-bit. Nếu thiếu, cửa sổ cài đặt hỏi trước khi tải Python 3.14.10 x64 cho tất cả tài khoản Windows. Gõ `y` rồi nhấn Enter để đồng ý. Windows có thể yêu cầu quyền quản trị hoặc khởi động lại.
 
-Để cài thủ công, chạy **Windows installer (64-bit)**, chọn **Customize installation** và bật tùy chọn cài Python cho tất cả người dùng. Chạy lại `install.ps1`, khởi động lại Resolve và mở plugin từ **Workspace → Scripts**. [Python 3.14.10 trên python.org](https://www.python.org/downloads/release/python-31410/)
+Để cài Python thủ công, tải **Windows installer (64-bit)**, chọn **Customize installation** và bật tùy chọn cài cho tất cả người dùng. Sau đó nhấp đúp lại tệp `setup.exe`. [Python 3.14.10 trên python.org](https://www.python.org/downloads/release/python-31410/)
 
-Nếu installer vẫn báo Resolve chưa nạp được Python sau khi cài, mở **Workspace → Console**, chọn **Py3** và chạy `import sys; print(sys.version)` nếu tùy chọn này xuất hiện. Nếu máy có nhiều bản Resolve, truyền `-ResolveDir` của bản 21.0.x khi chạy lại installer.
-
-### Dùng GPU qua Vulkan
-
-CPU là mặc định khi cài mới. Để dùng GPU qua Vulkan, cài với tùy chọn dưới đây. Installer tải gói Whisper Vulkan v1.9.2 do Subtitle Edit build và kiểm tra SHA-256 trước khi giải nén. [Gói Whisper Vulkan Windows x64](https://github.com/SubtitleEdit/support-files/releases/tag/whispercpp-192)
-
-```powershell
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\install.ps1 -EnableVulkan
-```
-
-Gói Vulkan đã được thử trên RTX 5060 với Windows và driver NVIDIA 610.88. Laptop AMD vẫn cần kiểm chứng. Bạn cũng có thể trỏ tới bản build của mình với `-WhisperVulkan` và giữ nguyên các DLL đi kèm. Worker tự chuyển về CPU nếu Vulkan lỗi. Chạy lại installer với `-DisableVulkan` để chọn CPU.
+Nếu bộ cài vẫn báo lỗi Python, bạn có thể kiểm tra trong **Workspace → Console** của Resolve. Chọn **Py3** nếu có, rồi chạy `import sys; print(sys.version)`.
 
 ### Nâng cấp và gỡ cài đặt
 
-Đóng cửa sổ plugin, giải nén ZIP phiên bản mới rồi chạy lại `install.ps1`. Installer đọc cấu hình từ mục menu hiện có, kể cả bản cài cũ trỏ vào `.runtime`, và tiếp tục dùng thư mục dữ liệu, model cùng tùy chọn backend đã lưu.
+Đóng cửa sổ plugin, rồi tải và nhấp đúp `setup.exe` của bản mới. Bộ cài tiếp tục dùng cấu hình, thư mục dữ liệu, model và lựa chọn CPU/GPU đã lưu, kể cả bản cài cũ trỏ vào `.runtime`. Nếu có lỗi, bộ cài dọn các tệp của lần cài đó và khôi phục tệp cài cũ. Python được cài cho tất cả tài khoản Windows qua lời nhắc riêng sẽ được giữ lại.
 
 Sau khi nâng cấp từ bản chưa dùng Silero, chọn **Index project** để nhận dạng lại các transcript cũ có media nguồn đang kết nối. Transcript cũ vẫn tìm được cho tới khi clip đó được nhận dạng thành công.
 
-Để gỡ, đóng cửa sổ plugin rồi chạy:
+Để gỡ, đóng cửa sổ plugin rồi nhấp đúp **Davinci Semantic Search - Uninstall** trong thư mục cài đặt, mặc định là `%LOCALAPPDATA%\DavinciSemanticSearch`. Media nguồn, chỉ mục, transcript, log, cấu hình và model được giữ lại. Chạy cài lại với cùng thư mục cài đặt để dùng tiếp dữ liệu.
+
+### Tùy chọn nâng cao
+
+CPU là mặc định khi cài mới. Để dùng GPU qua Vulkan, mở PowerShell trong thư mục chứa tệp cài đặt và chạy lệnh dưới đây với tên tệp của phiên bản bạn tải. Bộ cài tải gói Whisper Vulkan v1.9.2 do Subtitle Edit build và kiểm tra SHA-256 trước khi giải nén. [Gói Whisper Vulkan Windows x64](https://github.com/SubtitleEdit/support-files/releases/tag/whispercpp-192)
 
 ```powershell
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\uninstall.ps1
+.\davinci-semantic-search-<version>-windows-x64-setup.exe -EnableVulkan
 ```
 
-Script gỡ mục menu và tệp ứng dụng đã cài. Media nguồn, chỉ mục, transcript, log, cấu hình và model được giữ lại. Chạy cài lại với cùng thư mục cài đặt để dùng tiếp dữ liệu.
+Gói Vulkan đã được thử trên RTX 5060 với Windows và driver NVIDIA 610.88. Laptop AMD vẫn cần kiểm chứng. Worker tự chuyển về CPU nếu Vulkan lỗi. Chạy lại bộ cài với `-DisableVulkan` để chọn CPU, hoặc `-WhisperVulkan` để dùng bản build của bạn cùng các DLL đi kèm.
+
+Dùng `-InstallDir` để chọn thư mục cài riêng và `-DataDir` để chọn nơi lưu chỉ mục. Nếu Resolve ở vị trí tùy chỉnh, mở Resolve trước khi nhấp đúp bộ cài, hoặc dùng `-ResolveDir` trỏ tới thư mục chứa `Resolve.exe`. Với Resolve portable, dùng `-ScriptsDir` trỏ tới thư mục `Fusion\Scripts\Utility` khi cài và nâng cấp. Shortcut gỡ cài đặt sẽ dùng các đường dẫn đã lưu.
+
+Có thể chỉ định tài nguyên có sẵn qua `-FFmpeg`, `-FFprobe`, `-Codex`, `-WhisperCpu`, `-WhisperModel` hoặc `-WhisperVadModel`. Tùy chọn `-Uninstall` chạy gỡ trực tiếp từ bộ cài cho các lần cài cũ chưa có shortcut.
 
 ## Dùng trong Resolve
 
