@@ -16,9 +16,10 @@ import sys
 from uuid import UUID
 
 from .dependencies import describe_dependencies
+from .gpu import inspect_vulkan
 from .index import RunStatus
 from .runtime import Settings, python_module_command
-from .ui_text import english_diagnostic
+from .ui_text import GPU_RESUME_ADVICE, english_diagnostic
 
 
 UNKNOWN = "Unknown"
@@ -213,6 +214,9 @@ def describe_hardware(hardware: Hardware, settings: Settings, *, checked: bool =
 
 
 def describe_recognition(run: RunStatus | None, active: bool) -> str:
+    if run is not None and run.state == "gpu_interrupted":
+        return (f"Transcription stopped after an error on {run.device or run.backend}.\n"
+                f"{english_diagnostic(run.fallback)}\n{GPU_RESUME_ADVICE}")
     if run is None or (not run.backend and not (active and run.recognizing)):
         return "No transcription run yet."
     backend = {"CPU": "CPU", "Vulkan": "GPU via Vulkan", "CUDA": "GPU via CUDA"}.get(run.backend, UNKNOWN)
@@ -249,4 +253,8 @@ if __name__ == "__main__":
         adapters = read_adapters() if os.name == "nt" else None
         print(json.dumps([adapter.name for adapter in adapters] if adapters is not None else None))
     else:
-        print(describe_hardware(inspect_hardware(), Settings.load(Path(sys.argv[1])), checked=True))
+        settings = Settings.load(Path(sys.argv[1]))
+        print(json.dumps({
+            "text": describe_hardware(inspect_hardware(), settings, checked=True),
+            "gpu_names": list(inspect_vulkan(settings.whisper_vulkan).named_devices()),
+        }))

@@ -5,6 +5,9 @@ import re
 from .index import IndexStatus
 
 
+GPU_RESUME_ADVICE = "Try closing and reopening the plugin, then click Resume Indexing."
+
+
 def empty_search_message(status: IndexStatus, *, has_transcripts: bool, indexing: bool) -> str:
     if not status.phases:
         return "No media indexed. Click Index Project to scan the Media Pool."

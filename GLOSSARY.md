@@ -7,6 +7,9 @@ Tìm lại lời thoại tiếng Việt và tiếng Anh trong media nguồn và 
 **Media nguồn**  
 Tệp video hoặc âm thanh được nhập vào Media Pool của project Resolve.
 
+**Lựa chọn GPU nhận dạng**\
+Thiết lập cho editor chọn một GPU cụ thể hoặc để ứng dụng tự chọn GPU dùng để nhận dạng lời thoại.
+
 **Transcript gốc**  
 Bản lời thoại nhận dạng từ âm thanh của một media nguồn.
 

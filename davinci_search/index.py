@@ -194,6 +194,14 @@ class Index:
         with closing(self._connect()) as db, db:
             db.execute("UPDATE worker_run SET recognizing=0 WHERE token=?", (token,))
 
+    def interrupt_gpu(self, token: str, backend: str, device: str, reason: str) -> None:
+        with closing(self._connect()) as db, db:
+            db.execute(
+                """UPDATE worker_run SET state='gpu_interrupted', backend=?, device=?, fallback=?, recognizing=0
+                   WHERE token=? AND state='running'""",
+                (backend, device, reason, token),
+            )
+
     def pending(self, phase: str) -> list[Media]:
         with closing(self._connect()) as db:
             rows = db.execute(

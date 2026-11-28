@@ -36,7 +36,7 @@ CPU là mặc định khi cài mới. Để dùng GPU qua Vulkan, mở PowerShel
 .\davinci-semantic-search-<version>-windows-x64-setup.exe -EnableVulkan
 ```
 
-Gói Vulkan đã được thử trên RTX 5060 với Windows và driver NVIDIA 610.88. Laptop AMD vẫn cần kiểm chứng. Worker tự chuyển về CPU nếu Vulkan lỗi. Chạy lại bộ cài với `-DisableVulkan` để chọn CPU, hoặc `-WhisperVulkan` để dùng bản build của bạn cùng các DLL đi kèm.
+Gói Vulkan đã được thử trên RTX 5060 với Windows và driver NVIDIA 610.88. Laptop AMD vẫn cần kiểm chứng. Khi đã cấu hình Vulkan, mở **About → Transcription GPU** để chọn GPU cho lượt lập chỉ mục tiếp theo. **Auto** ưu tiên GPU rời mà Whisper phát hiện và thử GPU khác nếu khởi tạo thất bại. Nếu không dùng được GPU đã chọn, worker chuyển sang CPU khi bắt đầu nhận dạng. Chạy lại bộ cài với `-DisableVulkan` để chọn CPU, hoặc `-WhisperVulkan` để dùng bản build của bạn cùng các DLL đi kèm.
 
 Dùng `-InstallDir` để chọn thư mục cài riêng và `-DataDir` để chọn nơi lưu chỉ mục. Nếu Resolve ở vị trí tùy chỉnh, mở Resolve trước khi nhấp đúp bộ cài, hoặc dùng `-ResolveDir` trỏ tới thư mục chứa `Resolve.exe`. Với Resolve portable, dùng `-ScriptsDir` trỏ tới thư mục `Fusion\Scripts\Utility` khi cài và nâng cấp. Shortcut gỡ cài đặt sẽ dùng các đường dẫn đã lưu.
 
@@ -48,7 +48,7 @@ Có thể chỉ định tài nguyên có sẵn qua `-FFmpeg`, `-FFprobe`, `-Code
 2. Chọn **Nguồn** hoặc **Timeline** rồi nhập cụm cần tìm. Có thể gõ không dấu hoặc sai nhẹ. Đổi phạm vi sẽ chạy lại truy vấn đang nhập. Chọn một kết quả và bấm **Open at Source Time** để chọn clip trong Media Pool trên trang Edit. Khi hiện **Copy Source Timecode**, bấm nút đó rồi dán timecode vào ô timecode của Source Viewer để tới đầu đoạn transcript khớp. Cột **Source Time** hiển thị thời gian tính từ đầu tệp.
 3. Ở chế độ Timeline, kết quả **Trong timeline** hiển thị track và timecode. Chọn một hàng có vị trí đã xác minh rồi bấm **Add Temporary Marker** để đặt marker và đưa playhead tới frame đó. Marker tạm được giữ qua các lượt tìm. Bấm **Clear Temporary Markers** để dọn marker của công cụ trên timeline đang mở. Các đoạn ngoài điểm cắt hiển thị riêng. Clip phức tạp, tệp nhiều stream âm thanh, ánh xạ kênh khác bản nhận dạng hoặc đoạn giao điểm cắt có thể hiện **Chưa xác minh** nếu công cụ chưa xác định được frame hoặc phạm vi thoại.
 4. Khi đóng cửa sổ tìm kiếm, lượt lập chỉ mục tiếp tục chạy nền. Mở lại cửa sổ trong cùng project để xem tiến độ. Bấm **Stop** để dừng và **Resume Indexing** để tiếp tục từ phần đã lưu. Giữ chuột trên dòng trạng thái để xem các lỗi clip.
-5. Mở **About** để xem cấu hình máy, khả năng của driver, tình trạng bản chạy Whisper đã cấu hình và backend mà worker thực sự dùng. Nếu lượt nhận dạng chuyển về CPU, cửa sổ hiển thị lý do khi xác định được.
+5. Mở **About** để xem cấu hình máy, khả năng của driver, tình trạng bản chạy Whisper đã cấu hình và backend mà worker thực sự dùng. Nếu lượt nhận dạng chuyển về CPU, cửa sổ hiển thị lý do khi xác định được. Nếu GPU gặp lỗi sau khi đã hoàn thành một khối audio, plugin dừng lượt lập chỉ mục và gợi ý thử đóng rồi mở lại plugin trước khi bấm **Resume Indexing**. Lượt tiếp theo nhận dạng lại media nguồn đang dở và dùng tiếp các transcript đã lưu.
 
 SQLite và `worker.log` nằm theo project dưới thư mục dữ liệu. WAV trích xuất và JSON trung gian nằm trong `projects/<id-project>/scratch/run-<id-lượt>/`. Khi dừng, worker đợi các tiến trình con thoát rồi dọn toàn bộ thư mục của lượt đó. Nếu bị tắt cưỡng bức, lần mở lại sẽ dọn file mồ côi của project và thử lại nếu Windows còn khóa file.
 

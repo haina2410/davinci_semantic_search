@@ -12,6 +12,7 @@ from unittest.mock import patch
 from uuid import uuid4
 
 from davinci_search.dependencies import describe_dependencies
+from davinci_search.gpu import save_gpu_preference
 from davinci_search.hardware import Adapter, Hardware, describe_hardware, describe_recognition
 from davinci_search.index import Index, Media
 from davinci_search.runtime import Settings
@@ -52,10 +53,28 @@ elif tool == "ffmpeg":
         audio.setparams((1, 2, 16000, 0, "NONE", "not compressed"))
         audio.writeframes(b"\\0" * 3200)
     output.with_suffix(".source").write_text(Path(args[args.index("-i") + 1]).stem)
-elif tool == "whisper":
+elif tool in ("whisper", "vulkan"):
+    if tool == "vulkan":
+        print("ggml_vulkan: 0 = AMD Radeon(TM) Graphics (AMD) | uma: 1 |", file=sys.stderr, flush=True)
+        print("ggml_vulkan: 1 = Radeon RX 5500M (AMD) | uma: 0 |", file=sys.stderr, flush=True)
+        default_only = (root / "gpu-default-only").is_file()
+        if "--help" in args:
+            if not default_only:
+                print("  -dev N, --device N   GPU device ID", file=sys.stderr)
+            sys.exit()
     output = Path(args[args.index("-of") + 1] + ".json")
-    print("main: processing 'fixture' ...", file=sys.stderr, flush=True)
     source = Path(args[args.index("-f") + 1]).with_suffix(".source").read_text()
+    if tool == "vulkan":
+        if default_only and "--device" in args:
+            sys.exit(2)
+        gpu = "0" if default_only else args[args.index("--device") + 1]
+        with (root / "gpu-attempts").open("a") as attempts:
+            attempts.write(f"{source}:{gpu}\\n")
+        if (root / f"fail-gpu-{gpu}-{source}").is_file():
+            print("whisper_backend_init_gpu: no GPU found", file=sys.stderr, flush=True)
+        else:
+            print(f"whisper_backend_init_gpu: using Vulkan{gpu} backend", file=sys.stderr, flush=True)
+    print("main: processing 'fixture' ...", file=sys.stderr, flush=True)
     (root / f"recognized-{source}").touch()
     hold(output, "whisper" if source == "source" else f"whisper-{source}")
     text = "hello world" if source == "source" else "second transcript"
@@ -96,14 +115,14 @@ class WorkerTests(unittest.TestCase):
                     raise
                 time.sleep(0.05)
 
-    def project(self, name, hold, *, missing_vulkan=False, vad=False):
+    def project(self, name, hold, *, missing_vulkan=False, vad=False, vulkan=False):
         folder = self.root / name
         index = Index(folder / "index.sqlite3")
         (folder / "hold").write_text(hold)
         script = folder / "tool.py"
         script.write_text(TOOL)
         tools = {}
-        for stage in ("ffmpeg", "ffprobe", "whisper", "codex"):
+        for stage in ("ffmpeg", "ffprobe", "whisper", "codex", "vulkan"):
             if os.name == "nt":
                 launcher = folder / f"{stage}.cmd"
                 launcher.write_text(f'@echo off\n"{self.python}" "{script}" {stage} %*\n')
@@ -117,12 +136,15 @@ class WorkerTests(unittest.TestCase):
         source.touch()
         config = folder / "settings.json"
         vad_model = folder / "silero.bin"
+        vulkan_tool = tools["vulkan"] if vulkan else None
+        if missing_vulkan:
+            vulkan_tool = str(folder / "missing.exe")
         if vad:
             vad_model.touch()
         config.write_text(json.dumps({
             "data_dir": str(folder), "python": self.python, "whisper_model": str(source),
             "whisper_cpu": tools["whisper"], "ffprobe": tools["ffprobe"], "ffmpeg": tools["ffmpeg"],
-            "codex": tools["codex"], "whisper_vulkan": str(folder / "missing.exe") if missing_vulkan else None,
+            "codex": tools["codex"], "whisper_vulkan": vulkan_tool,
             "whisper_vad_model": str(vad_model) if vad else None,
         }))
         self.addCleanup(self.stop_if_running, index)
@@ -169,6 +191,65 @@ class WorkerTests(unittest.TestCase):
         self.assertTrue(request_index(index, settings, lambda: [media]))
         self.wait_state(index, "finished")
         self.assertEqual(index.raw(media), {0: "speech from VAD"})
+
+    def test_auto_tries_discrete_gpu_then_integrated_gpu_on_startup_failure(self):
+        index, settings, media = self.project("auto-gpu", "", vulkan=True)
+        index.path.with_name("fail-gpu-1-source").touch()
+        self.assertTrue(request_index(index, settings, lambda: [media]))
+        run = self.wait_state(index, "finished")
+        self.assertEqual(index.path.with_name("gpu-attempts").read_text().splitlines(), ["source:1", "source:0"])
+        self.assertEqual((run.backend, run.device, run.fallback), ("Vulkan", "AMD Radeon(TM) Graphics", ""))
+        self.assertEqual(index.raw(media), {0: "hello world"})
+
+    def test_named_gpu_startup_failure_goes_directly_to_cpu(self):
+        index, settings, media = self.project("named-gpu", "", vulkan=True)
+        save_gpu_preference(settings.config_file, "AMD Radeon(TM) Graphics")
+        index.path.with_name("fail-gpu-0-source").touch()
+        self.assertTrue(request_index(index, settings, lambda: [media]))
+        run = self.wait_state(index, "finished")
+        self.assertEqual(index.path.with_name("gpu-attempts").read_text().splitlines(), ["source:0"])
+        self.assertIn("did not detect a GPU", describe_recognition(run, False))
+        self.assertEqual(run.backend, "CPU")
+        self.assertEqual(index.raw(media), {0: "hello world"})
+
+    def test_custom_vulkan_without_device_selection_uses_its_default_in_auto(self):
+        index, settings, media = self.project("custom-gpu", "", vulkan=True)
+        index.path.with_name("gpu-default-only").touch()
+        self.assertTrue(request_index(index, settings, lambda: [media]))
+        run = self.wait_state(index, "finished")
+        self.assertEqual((run.backend, run.device), ("Vulkan", "AMD Radeon(TM) Graphics"))
+
+        save_gpu_preference(settings.config_file, "Radeon RX 5500M")
+        Path(media.path).write_bytes(b"changed")
+        rescanned = Media.from_path(media.key, media.name, media.path)
+        self.assertTrue(request_index(index, settings, lambda: [rescanned]))
+        run = self.wait_state(index, "finished")
+        self.assertEqual(run.backend, "CPU")
+        self.assertIn("could not select the saved GPU", describe_recognition(run, False))
+        self.assertEqual(index.path.with_name("gpu-attempts").read_text().splitlines(), ["source:0"])
+
+    def test_gpu_failure_after_success_interrupts_and_resumes_saved_queue(self):
+        index, settings, first = self.project("gpu-interruption", "codex", vulkan=True)
+        path = index.path.with_name("second.wav")
+        path.touch()
+        second = Media.from_path("second", "Second", str(path))
+        index.path.with_name("fail-gpu-1-second").touch()
+        self.assertTrue(request_index(index, settings, lambda: [first, second]))
+        run = self.wait_state(index, "gpu_interrupted")
+        self.assertEqual(run.device, "Radeon RX 5500M")
+        self.assertIn("Try closing and reopening the plugin", describe_recognition(run, False))
+        self.assertTrue(index.status().needs_attention)
+        self.assertEqual(index.raw(first), {0: "hello world"})
+        self.assertEqual(index.raw(second), {})
+
+        index.path.with_name("release-codex").touch()
+        save_gpu_preference(settings.config_file, "AMD Radeon(TM) Graphics")
+        self.assertTrue(request_index(index, settings, lambda: [first, second]))
+        run = self.wait_state(index, "finished")
+        attempts = index.path.with_name("gpu-attempts").read_text().splitlines()
+        self.assertEqual(attempts, ["source:1", "second:1", "second:0"])
+        self.assertEqual(run.device, "AMD Radeon(TM) Graphics")
+        self.assertEqual(index.raw(second), {0: "second transcript"})
 
     def test_silero_cpu_startup_does_not_override_whisper_vulkan(self):
         log = WhisperLog(False, "")

@@ -12,6 +12,7 @@ from tempfile import TemporaryDirectory
 import wave
 
 from .diagnostics import DiagnosticLog, ToolFailure, error_code
+from .gpu import VulkanDevice, inspect_vulkan, load_gpu_preference, parse_vulkan_device
 from .index import Media, Segment, Transcript
 from .runtime import Settings, run_tool
 
@@ -21,7 +22,13 @@ CHUNK_SECONDS = 300
 BackendReport = Callable[[str, str, str], None]
 PROCESSING_AUDIO = "main: processing "
 GPU_BACKEND = re.compile(r"whisper_backend_init_gpu: using ((Vulkan|CUDA)\d+) backend", re.I)
-VULKAN_DEVICE = re.compile(r"ggml_vulkan:\s*(\d+) = (.+?) \(.+?\) \|")
+
+
+class GpuInterrupted(ToolFailure):
+    def __init__(self, backend: str, device: str, reason: str, failure: str, code: int | None):
+        super().__init__(reason, "whisper_vulkan", failure, code)
+        self.backend = backend
+        self.device = device
 
 
 class Whisper:
@@ -32,8 +39,10 @@ class Whisper:
         self.report = report
         self.end = end
         self.diagnostics = diagnostics
-        self.vulkan = settings.whisper_vulkan
-        self.fallback = "" if self.vulkan else "Chưa cấu hình bản Whisper Vulkan."
+        self.gpu_preference = load_gpu_preference(settings.config_file) if settings.whisper_vulkan else None
+        self.gpu_attempts: list[VulkanDevice | None] | None = None if settings.whisper_vulkan else []
+        self.active_gpu: tuple[str, str] | None = None
+        self.fallback = "" if settings.whisper_vulkan else "Chưa cấu hình bản Whisper Vulkan."
 
     def transcribe(self, media: Media) -> Transcript:
         settings = self.settings
@@ -88,31 +97,17 @@ class Whisper:
         if self.settings.whisper_vad_model is not None:
             arguments.extend(["--vad", "--vad-model", str(self.settings.whisper_vad_model)])
         try:
-            if self.vulkan:
-                probe = WhisperLog(False, "")
-                code = None
-                try:
-                    code = self._run_whisper([self.vulkan, *arguments], probe)
-                    if code == 0 and json_output.is_file():
-                        result = read_segments(json_output, sample_offset, samples)
-                        if probe.reason:
-                            self._use_cpu(probe.reason, probe.failure)
-                        return result
-                    reason = probe.reason or (
-                        f"Whisper Vulkan thoát với mã {code}." if code else "Whisper Vulkan không tạo transcript."
-                    )
-                    failure = probe.failure or ("nonzero_exit" if code else "missing_output")
-                except FileNotFoundError as error:
-                    code, failure = error_code(error), "tool_not_found"
-                    reason = "Không tìm thấy bản Whisper Vulkan đã cấu hình."
-                except OSError as error:
-                    code, failure = error_code(error), "os_error"
-                    reason = f"Không chạy được Whisper Vulkan (mã {code})." if code else "Không chạy được Whisper Vulkan."
-                except (ValueError, KeyError, TypeError):
-                    failure = "invalid_output"
-                    reason = "Whisper Vulkan tạo transcript không hợp lệ."
-                self._use_cpu(reason, failure, code)
-                json_output.unlink(missing_ok=True)
+            vulkan = self.settings.whisper_vulkan
+            if vulkan:
+                if self.gpu_attempts is None:
+                    self.gpu_attempts = self._discover_gpu_attempts(vulkan)
+                if self.gpu_attempts:
+                    try:
+                        return self._recognize_vulkan(vulkan, arguments, json_output, sample_offset, samples)
+                    except GpuInterrupted:
+                        raise
+                    except ToolFailure as error:
+                        self._use_cpu(str(error), error.reason, error.code)
 
             code = self._run_whisper(
                 [self.settings.whisper_cpu, *arguments, "-ng"], WhisperLog(True, self.fallback)
@@ -124,8 +119,58 @@ class Whisper:
         finally:
             self.end()
 
+    def _discover_gpu_attempts(self, executable: str) -> list[VulkanDevice | None]:
+        inventory = inspect_vulkan(executable)
+        if self.gpu_preference is None:
+            return list(inventory.devices) if inventory.selectable and inventory.devices else [None]
+        if device := inventory.named_devices().get(self.gpu_preference):
+            return [device]
+        if inventory.selectable:
+            self._use_cpu("The selected transcription GPU is unavailable.", "gpu_unavailable")
+        else:
+            self._use_cpu("The configured Whisper Vulkan runtime could not select the saved GPU.",
+                          "gpu_selection_unavailable")
+        return []
+
+    def _recognize_vulkan(
+        self, executable: str, arguments: list[str], output: Path, sample_offset: int, samples: int,
+    ) -> list[Segment]:
+        assert self.gpu_attempts
+        for device in self.gpu_attempts:
+            command = [executable, *arguments]
+            if device is not None:
+                command.extend(["--device", str(device.ordinal)])
+            probe = WhisperLog(False, "", device)
+            code = None
+            try:
+                code = self._run_whisper(command, probe)
+                if code == 0 and not probe.reason and output.is_file():
+                    result = read_segments(output, sample_offset, samples)
+                    self.gpu_attempts = [device]
+                    backend, name, _ = probe.backend()
+                    if backend in ("Vulkan", "CUDA"):
+                        self.active_gpu = backend, name
+                    return result
+                reason = probe.reason or (
+                    f"Whisper Vulkan thoát với mã {code}." if code else "Whisper Vulkan không tạo transcript."
+                )
+                failure = probe.failure or ("nonzero_exit" if code else "missing_output")
+            except FileNotFoundError as error:
+                code, failure = error_code(error), "tool_not_found"
+                reason = "Không tìm thấy bản Whisper Vulkan đã cấu hình."
+            except OSError as error:
+                code, failure = error_code(error), "os_error"
+                reason = f"Không chạy được Whisper Vulkan (mã {code})." if code else "Không chạy được Whisper Vulkan."
+            except (ValueError, KeyError, TypeError):
+                failure = "invalid_output"
+                reason = "Whisper Vulkan tạo transcript không hợp lệ."
+            if self.active_gpu:
+                raise GpuInterrupted(*self.active_gpu, reason, failure, code)
+            output.unlink(missing_ok=True)
+        raise ToolFailure(reason, "whisper_vulkan", failure, code)
+
     def _use_cpu(self, reason: str, failure: str, code: int | None = None) -> None:
-        self.vulkan = None
+        self.gpu_attempts = []
         self.fallback = reason
         self.diagnostics.record("backend_fallback", step="whisper_vulkan", reason=failure, code=code, backend="CPU")
         print(f"{reason} Dùng CPU cho lượt lập chỉ mục này.", flush=True)
@@ -141,23 +186,30 @@ class Whisper:
             for line in process.stderr:
                 probe.observe(line)
                 if line.startswith(PROCESSING_AUDIO):
+                    probe.check_device()
+                    if probe.reason and not probe.cpu:
+                        process.kill()
+                        break
                     self.report(*probe.backend())
             code = process.wait()
         if code == 0:
-            self.report(*probe.backend())
+            probe.check_device()
+            if not probe.reason or probe.cpu:
+                self.report(*probe.backend())
         return code
 
 
 class WhisperLog:
     """Read the selected backend from whisper.cpp startup, before recognition starts."""
 
-    def __init__(self, cpu: bool, reason: str):
+    def __init__(self, cpu: bool, reason: str, expected: VulkanDevice | None = None):
         self.cpu = cpu
         self.reason = reason
         self.failure = ""
         self.selected: re.Match[str] | None = None
         self.devices: dict[str, str] = {}
         self.processing = False
+        self.expected = expected
 
     def observe(self, line: str) -> None:
         if line.startswith(PROCESSING_AUDIO):
@@ -165,9 +217,8 @@ class WhisperLog:
         if self.processing:
             # Silero starts on CPU after this point and emits its own backend logs.
             return
-        device = VULKAN_DEVICE.match(line)
-        if device:
-            self.devices[f"Vulkan{device[1]}".casefold()] = device[2]
+        if device := parse_vulkan_device(line):
+            self.devices[f"vulkan{device.ordinal}"] = device.name
         selected = GPU_BACKEND.match(line)
         if selected:
             self.selected = selected
@@ -178,6 +229,15 @@ class WhisperLog:
             elif "failed to initialize" in line:
                 self.reason = "Whisper không khởi tạo được backend GPU."
                 self.failure = "gpu_init_failed"
+
+    def check_device(self) -> None:
+        if self.expected is None or self.reason:
+            return
+        backend = f"vulkan{self.expected.ordinal}"
+        if (self.selected is None or self.selected[1].casefold() != backend
+                or self.devices.get(backend) != self.expected.name):
+            self.reason = "Whisper did not initialize the requested transcription GPU."
+            self.failure = "gpu_selection_mismatch"
 
     def backend(self) -> tuple[str, str, str]:
         if self.cpu or self.reason:

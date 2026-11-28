@@ -20,7 +20,7 @@ from .polish import Codex, CodexUnavailable
 from .process_tree import start_queue_process
 from .runtime import Settings, python_module_command
 from .scratch import cleanup_scratch, run_scratch, scratch_path
-from .transcribe import Whisper
+from .transcribe import GpuInterrupted, Whisper
 
 if os.name == "nt":
     import msvcrt
@@ -85,7 +85,7 @@ def request_stop(index: Index, token: str) -> bool:
 
 def stop_requested(index: Index, token: str) -> bool:
     run = index.run_status()
-    return bool(run and run.token == token and run.state == "stopping")
+    return bool(run and run.token == token and run.state in ("stopping", "gpu_interrupted"))
 
 
 def worker_command(settings: Settings, index: Index, command: str, token: str) -> list[str]:
@@ -123,7 +123,7 @@ def request_index(index: Index, settings: Settings, scan: Callable[[], list[Medi
 def run_queue(
     index: Index, transcribe: Callable[[Media], Transcript],
     polish: Callable[[dict[int, str]], dict[int, str]],
-    diagnostics: DiagnosticLog | None = None,
+    diagnostics: DiagnosticLog | None = None, *, token: str | None = None,
 ) -> None:
     polish_unavailable: str | None = None
 
@@ -164,6 +164,14 @@ def run_queue(
                 transcript = transcribe(media)
                 check_revision(media)
                 saved = index.save_transcript(media, transcript)
+            except GpuInterrupted as error:
+                if token is None:
+                    raise
+                if diagnostics is not None:
+                    diagnostics.failure("transcription_interrupted", "transcription", error)
+                # The supervisor stops the process tree, including any concurrent polishing.
+                index.interrupt_gpu(token, error.backend, error.device, str(error))
+                return
             except (OSError, ValueError, KeyError, RuntimeError, subprocess.TimeoutExpired) as error:
                 record_failure(media, "transcription", error)
                 continue
@@ -224,8 +232,11 @@ def supervise(index: Index, settings: Settings, token: str, diagnostics: Diagnos
             time.sleep(0.1)
         index.end_recognition(token)
         if not index.change_run(token, ("running",), outcome):
+            run = index.run_status()
             if index.change_run(token, ("stopping",), "stopped"):
                 outcome = "stopped"
+            elif run and run.token == token and run.state == "gpu_interrupted":
+                outcome = run.state
         diagnostics.record("index_ended", reason=outcome, code=exit_code)
 
 
@@ -254,7 +265,7 @@ def run_queue_process(config_file: Path, database: Path, token: str) -> None:
                 diagnostics.record("transcription_backend", backend=backend)
 
         whisper = Whisper(settings, scratch, report_backend, lambda: index.end_recognition(token), diagnostics)
-        run_queue(index, whisper.transcribe, Codex(settings.codex, scratch).polish, diagnostics)
+        run_queue(index, whisper.transcribe, Codex(settings.codex, scratch).polish, diagnostics, token=token)
     except Exception as error:
         diagnostics.failure("worker_error", "queue", error)
         raise

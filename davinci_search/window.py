@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from functools import wraps
+import json
 import os
 from pathlib import Path
 import subprocess
@@ -10,6 +11,7 @@ from subprocess import Popen
 from time import monotonic, sleep
 
 from .diagnostics import export_bundle, open_export_folder
+from .gpu import load_gpu_preference, save_gpu_preference
 from .hardware import describe_recognition, hardware_fallback, start_hardware_probe
 from .index import Index, IndexStatus, Media, project_db
 from .resolve import read_timeline, scan_media, select_source, source_timecode
@@ -17,7 +19,7 @@ from .runtime import Settings
 from .search import Hit, search
 from .timeline import Snapshot, TimelineHit, clear_search_markers, mark_search_result, project_hits, timecode
 from .timeline_audit import audit_timeline, canonical_path
-from .ui_text import empty_search_message, english_diagnostic
+from .ui_text import GPU_RESUME_ADVICE, empty_search_message, english_diagnostic
 from .worker import STOPPABLE, request_index, request_stop, start_recovery, starting, worker_active
 
 
@@ -61,10 +63,15 @@ def open_window(resolve, dispatcher_factory, settings: Settings) -> None:
     about = dispatch.AddWindow(
         {"ID": "SearchAbout", "WindowTitle": "About · Davinci Semantic Search", "Geometry": [280, 220, 650, 420]},
         [ui.VGroup({"Spacing": 12}, [
+            ui.HGroup({"Visible": bool(settings.whisper_vulkan), "Weight": 0}, [
+                ui.Label({"Text": "Transcription GPU", "Weight": 0}),
+                ui.ComboBox({"ID": "TranscriptionGpu", "Enabled": False,
+                             "Events": {"CurrentIndexChanged": True}, "Weight": 1}),
+            ]),
             ui.TextEdit({"ID": "AboutDetails", "ReadOnly": True, "Weight": 1,
                          "StyleSheet": "font-family: Consolas;"}),
             ui.HGroup({"Weight": 0}, [
-                ui.Label({"ID": "ExportStatus", "Text": "", "WordWrap": True, "Weight": 1}),
+                ui.Label({"ID": "AboutStatus", "Text": "", "WordWrap": True, "Weight": 1}),
                 ui.Button({"ID": "ExportLogs", "Text": "Export logs", "Weight": 0}),
                 ui.Button({"ID": "Done", "Text": "Close", "Weight": 0}),
             ]),
@@ -72,6 +79,7 @@ def open_window(resolve, dispatcher_factory, settings: Settings) -> None:
     )
     about.Hide()
     about_widgets = about.GetItems()
+    gpu_picker = about_widgets["TranscriptionGpu"]
     scope = widgets["Scope"]
     scope.AddItem("Source")
     scope.AddItem("Timeline")
@@ -100,6 +108,9 @@ def open_window(resolve, dispatcher_factory, settings: Settings) -> None:
     hardware: Popen[str] | None = None
     hardware_deadline = 0.0
     hardware_text = "Checking system information and dependencies…"
+    gpu_names: list[str] = []
+    gpu_choices: list[str | None] = []
+    selected_gpu: str | None = None
     resolve_status = f"{'Resolve':18} Connected · {resolve.GetProductName() or 'DaVinci Resolve'}"
     recognition_text = describe_recognition(None, False)
     closed = False
@@ -152,6 +163,38 @@ def open_window(resolve, dispatcher_factory, settings: Settings) -> None:
         if details.PlainText != text:
             details.PlainText = text
 
+    def update_gpu_picker() -> None:
+        gpu_picker.Enabled = False
+        gpu_picker.Clear()
+        gpu_choices[:] = [None, *gpu_names]
+        gpu_picker.AddItem("Auto")
+        for name in gpu_names:
+            gpu_picker.AddItem(name)
+        if selected_gpu and selected_gpu not in gpu_names:
+            gpu_choices.append(selected_gpu)
+            gpu_picker.AddItem(f"{selected_gpu} (unavailable)")
+        gpu_picker.CurrentIndex = gpu_choices.index(selected_gpu)
+        gpu_picker.Enabled = len(gpu_choices) > 1
+
+    def change_gpu(event=None) -> None:
+        nonlocal selected_gpu
+        choice = gpu_picker.CurrentIndex
+        if not gpu_picker.Enabled or not 0 <= choice < len(gpu_choices):
+            return
+        name = gpu_choices[choice]
+        if name == selected_gpu:
+            return
+        status = about_widgets["AboutStatus"]
+        try:
+            save_gpu_preference(settings.config_file, name)
+        except OSError:
+            update_gpu_picker()
+            status.Text = "Could not save the transcription GPU preference."
+            return
+        selected_gpu = name
+        update_gpu_picker()
+        status.Text = "GPU preference saved for the next indexing run."
+
     def update_progress(index: Index) -> tuple[IndexStatus, bool]:
         nonlocal controlled, recovery, cleanup_pending, next_cleanup, recognition_text
         run = index.run_status()
@@ -197,6 +240,9 @@ def open_window(resolve, dispatcher_factory, settings: Settings) -> None:
             f"{name} — {english_diagnostic(detail)}" for name, detail in status.errors[:10]
         )
         recognition_text = describe_recognition(run, running and not stopping)
+        if run and run.state == "gpu_interrupted":
+            widgets["IndexStatus"].Text = f"GPU error · {GPU_RESUME_ADVICE}"
+            widgets["IndexStatus"].ToolTip = recognition_text
         update_about()
         return status, running and not stopping
 
@@ -209,8 +255,16 @@ def open_window(resolve, dispatcher_factory, settings: Settings) -> None:
                 return
             hardware.kill()
         result, _ = hardware.communicate()
-        hardware_text = (result.strip() if hardware.returncode == 0 else "") or hardware_fallback(settings)
+        gpu_names.clear()
+        try:
+            details = json.loads(result) if hardware.returncode == 0 else None
+        except ValueError:
+            details = None
+        hardware_text = details["text"] if details else hardware_fallback(settings)
+        if details:
+            gpu_names.extend(details["gpu_names"])
         hardware = None
+        update_gpu_picker()
         update_about()
 
     @handle_errors
@@ -248,14 +302,23 @@ def open_window(resolve, dispatcher_factory, settings: Settings) -> None:
 
     @handle_errors
     def open_about():
-        nonlocal hardware, hardware_deadline, hardware_text
+        nonlocal hardware, hardware_deadline, hardware_text, selected_gpu
         if hardware is None:
             hardware_text = "Checking system information and dependencies…"
+            gpu_picker.Enabled = False
+            if settings.whisper_vulkan:
+                try:
+                    selected_gpu = load_gpu_preference(settings.config_file)
+                except (OSError, ValueError):
+                    selected_gpu = None
+                    about_widgets["AboutStatus"].Text = "Could not read the transcription GPU preference."
             try:
                 hardware = start_hardware_probe(settings)
                 hardware_deadline = monotonic() + 8
             except OSError:
                 hardware_text = hardware_fallback(settings)
+                gpu_names.clear()
+                update_gpu_picker()
         update_about()
         about.Show()
         about.Raise()
@@ -265,7 +328,7 @@ def open_window(resolve, dispatcher_factory, settings: Settings) -> None:
         about.Hide()
 
     def export_logs(event=None):
-        status = about_widgets["ExportStatus"]
+        status = about_widgets["AboutStatus"]
         try:
             project = manager.GetCurrentProject() if manager else None
             project_id = project.GetUniqueId() if project else ""
@@ -467,6 +530,7 @@ def open_window(resolve, dispatcher_factory, settings: Settings) -> None:
     about.On.SearchAbout.Close = close_about
     about.On.Done.Clicked = close_about
     about.On.ExportLogs.Clicked = export_logs
+    about.On.TranscriptionGpu.CurrentIndexChanged = change_gpu
     refresh()
     window.Show()
     next_progress = 0.0
